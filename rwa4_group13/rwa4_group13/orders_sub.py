@@ -416,6 +416,11 @@ class rwa4(Node):
 
         super().__init__('rwa4')
 
+        self.declare_parameter('order_id', "0")
+        self._get_order_id = self.get_parameter('order_id').get_parameter_value().string_value
+        
+        self.get_logger().info('Get order: %s' % self._get_order_id)
+
         qos_policy = rclpy.qos.QoSProfile(reliability=rclpy.qos.ReliabilityPolicy.BEST_EFFORT,
                                           history=rclpy.qos.HistoryPolicy.KEEP_LAST,
                                           depth=1)
