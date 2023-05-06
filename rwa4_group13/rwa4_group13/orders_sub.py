@@ -406,6 +406,7 @@ class rwa4(Node):
     left_bin_msg = False
     right_bin_msg = False
     parse_flag = False
+    order_picked = False
 
     def __init__(self):
         """
@@ -445,8 +446,10 @@ class rwa4(Node):
         self.tray2_poses = None
         self.part1_poses = None
         self.part2_poses = None
-        self.order = None
+        self.order = []
 
+
+        self.order_id_to_pick = None
 
     def orders_callback(self, msg):
         """
@@ -455,19 +458,21 @@ class rwa4(Node):
         Args:
             msg (Order): Order read from topic /ariac/orders
         """
-
-        self.order = AriacOrder(order_id = msg.id,
+        
+        self.order.append(AriacOrder(order_id = msg.id,
                       order_type = msg.type,
                       order_priority = msg.priority,
                       kitting_task = msg.kitting_task
-                      )
+                      ))
 
-        # enable the flags to log only the first message
-        self.table1_msg = True
-        self.table2_msg = True
-        self.left_bin_msg = True
-        self.right_bin_msg = True
-        self.parse_flag = True
+        if len(self.order) == 4:
+            self.order_id_to_pick = "2"
+            # enable the flags to log only the first message
+            self.table1_msg = True
+            self.table2_msg = True
+            self.left_bin_msg = True
+            self.right_bin_msg = True
+            self.parse_flag = True
 
 
     def table1_callback(self, msg):
@@ -481,7 +486,7 @@ class rwa4(Node):
         if self.table1_msg:
             self.tray1_poses = TrayPoses(tray_poses = msg.tray_poses,
                             sensor_pose = msg.sensor_pose)
-            if self.tray1_poses and self.tray1_poses.poses and self.tray1_poses.sensor_pose:
+            if self.tray1_poses and self.tray1_poses.poses and self.tray1_poses.sensor_pose and self.tray1_poses.ids:
                 self.table1_msg = False
 
     def table2_callback(self, msg):
@@ -495,8 +500,9 @@ class rwa4(Node):
         if self.table2_msg:
             self.tray2_poses = TrayPoses(tray_poses = msg.tray_poses,
                             sensor_pose = msg.sensor_pose)
-            if self.tray2_poses and self.tray2_poses.poses and self.tray2_poses.sensor_pose:
+            if self.tray2_poses and self.tray2_poses.poses and self.tray2_poses.sensor_pose and self.tray2_poses.ids:
                 self.table2_msg = False
+                
 
     def left_bin_callback(self, msg):
         """
@@ -510,7 +516,7 @@ class rwa4(Node):
             self.part1_poses = PartPoses(part_poses = msg.part_poses,
                             sensor_pose = msg.sensor_pose)
             if self.part1_poses and self.part1_poses.poses and self.part1_poses.parts and self.part1_poses.sensor_pose:
-                self.part1_msg = False
+                self.left_bin_msg = False
 
     def right_bin_callback(self, msg):
         """
@@ -524,7 +530,7 @@ class rwa4(Node):
             self.part2_poses = PartPoses(part_poses = msg.part_poses,
                             sensor_pose = msg.sensor_pose)
             if self.part2_poses and self.part2_poses.poses and self.part2_poses.parts and self.part2_poses.sensor_pose:
-                self.part2_msg = False
+                self.right_bin_msg = False
 
 
     def parse_print(self):
@@ -532,15 +538,24 @@ class rwa4(Node):
         Print all the required information by parsing the objects created.
         Check if all the message flags are disabled and parse flag is enabled
         """
-
-        if (not (self.table1_msg and self.table2_msg and self.left_bin_msg and self.right_bin_msg)) and self.parse_flag:
+        # print(self.table1_msg, self.table2_msg, self.left_bin_msg, self.right_bin_msg)
+        if ((not self.table1_msg) and (not self.table2_msg) and (not self.left_bin_msg) and (not self.right_bin_msg)) and self.parse_flag:
             ############ Order ##########
-            output_order = "\n\n----------------------\n--- Order {} ---\n----------------------\n".format(self.order.id)
+            # print(self.tray1_poses.__str__())
+            # print(self.tray2_poses.__str__())
+            
+            order_picked = [order for order in self.order 
+                            if order.id == self.order_id_to_pick][0]
+            # print(order_picked)
+            output_order = "\n\n----------------------\n--- Order {} ---\n----------------------\n".format(order_picked.id)
 
             ############ Tray ##########
             all_tray_ids = [*self.tray1_poses.ids, *self.tray2_poses.ids]
+            # print(all_tray_ids)
+            # print(self.tray1_poses.__str__(), self.tray2_poses.__str__())
+            # exit(0)
             all_tray_poses = [*self.tray1_poses.poses, *self.tray2_poses.poses]
-            tray_id = self.order.kitting_task.tray_id
+            tray_id = order_picked.kitting_task.tray_id
             cur_tray_pose = None
 
             for idx, t_id in enumerate(all_tray_ids):
@@ -563,7 +578,7 @@ class rwa4(Node):
             all_part_poses = [*self.part1_poses.poses, *self.part2_poses.poses]
             output_part = []
 
-            for cur_part in self.order.kitting_task.parts:
+            for cur_part in order_picked.kitting_task.parts:
                 for part_idx, part_parts in enumerate(all_part_parts):
                     if cur_part.color == part_parts.color and cur_part.type == part_parts.type:
                             cur_part_pose = all_part_poses[part_idx]
