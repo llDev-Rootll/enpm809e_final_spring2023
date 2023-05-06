@@ -541,19 +541,15 @@ class rwa4(Node):
         # print(self.table1_msg, self.table2_msg, self.left_bin_msg, self.right_bin_msg)
         if ((not self.table1_msg) and (not self.table2_msg) and (not self.left_bin_msg) and (not self.right_bin_msg)) and self.parse_flag:
             ############ Order ##########
-            # print(self.tray1_poses.__str__())
-            # print(self.tray2_poses.__str__())
-            
+
             order_picked = [order for order in self.order 
                             if order.id == self.order_id_to_pick][0]
-            # print(order_picked)
+
             output_order = "\n\n----------------------\n--- Order {} ---\n----------------------\n".format(order_picked.id)
 
             ############ Tray ##########
             all_tray_ids = [*self.tray1_poses.ids, *self.tray2_poses.ids]
-            # print(all_tray_ids)
-            # print(self.tray1_poses.__str__(), self.tray2_poses.__str__())
-            # exit(0)
+            
             all_tray_poses = [*self.tray1_poses.poses, *self.tray2_poses.poses]
             tray_id = order_picked.kitting_task.tray_id
             cur_tray_pose = None
