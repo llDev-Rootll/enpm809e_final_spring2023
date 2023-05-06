@@ -25,8 +25,9 @@ class Part():
 
         self.color = part_color
         self.type = part_type
-        self.quadrant = kwargs["part_quadrant"] if kwargs else None
-        self.part_bin = kwargs["part_bin"] if kwargs else None
+        if kwargs:
+            self.quadrant = kwargs["part_quadrant"] if "part_quadrant" in kwargs else None
+            self.part_bin = kwargs["part_bin"] if "part_bin" in kwargs else None
     
     def __str__(self) -> str:
         """

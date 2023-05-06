@@ -93,20 +93,20 @@ class rwa4(Node):
             EnterToolChanger, '/competitor/floor_robot/enter_tool_changer',
             callback_group=service_group)
         
-        self._retract_from_tool_changer_client
-        self._retract_from_agv_client
+        # self._retract_from_tool_changer_client
+        # self._retract_from_agv_client
 
-        self._pickup_tray_client
-        self._move_tray_to_agv_client
-        self._place_tray_client
+        # self._pickup_tray_client
+        # self._move_tray_to_agv_client
+        # self._place_tray_client
         
 
-        self._pickup_part_client
-        self._move_part_to_agv_client
-        self._plave_part_in_agv_client
+        # self._pickup_part_client
+        # self._move_part_to_agv_client
+        # self._plave_part_in_agv_client
 
-        self._lock_agv_client
-        self._move_agv_to_warehouse_client
+        # self._lock_agv_client
+        # self._move_agv_to_warehouse_client
 
 
         ##############################################################
@@ -138,7 +138,7 @@ class rwa4(Node):
             AdvancedLogicalCameraImage, '/ariac/sensors/right_bins_camera/image',
             self.right_bin_callback, qos_policy)
 
-        self.timed_function = self.create_timer(1, self.parse_order,callback_group=timer_group)
+        self.timed_function = self.create_timer(0.1, self.parse_order)
 
         # Initiate the poses as None
         self.tray1_poses = None
@@ -175,6 +175,44 @@ class rwa4(Node):
             self.get_logger().info(f'Moved {robot_name} to home position')
         else:
             self.get_logger().warn(future.result().message)
+    def goto_tool_changer(self, robot, station, gripper_type):
+        '''
+        Move the end effector inside the gripper slot.
+
+        Args:
+            station (str): Gripper station name
+            gripper_type (str): Gripper type
+
+        Raises:
+            KeyboardInterrupt: Exception raised when the user presses Ctrl+C
+        '''
+
+        self.get_logger().info('Move inside gripper slot service called')
+
+        request = EnterToolChanger.Request()
+
+        if robot == "floor_robot":
+            request.robot = RobotsMsg.FLOOR_ROBOT
+        else:
+            raise ValueError('Invalid robot name')
+
+        request.station = station
+        request.gripper_type = gripper_type
+
+        future = self._goto_tool_changer_client.call_async(request)
+
+        try:
+            rclpy.spin_until_future_complete(self, future)
+        except KeyboardInterrupt as kb_error:
+            raise KeyboardInterrupt from kb_error
+
+        if future.result() is not None:
+            response = future.result()
+            if response:
+                self.get_logger().info('Robot is at the tool changer')
+        else:
+            self.get_logger().error(f'Service call failed {future.exception()}')
+            self.get_logger().error('Unable to move the robot to the tool changer')
 
     def _competition_state_cb(self, msg: CompetitionState):
         '''
@@ -294,11 +332,13 @@ class rwa4(Node):
         Print all the required information by parsing the objects created.
         Check if all the message flags are disabled and parse flag is enabled
         """
-        if self._competition_state == CompetitionState.READY and not self._competition_started:
-            self.start_competition()
-
+        # if self._competition_state == CompetitionState.READY and not self._competition_started:
+        #     self.start_competition()
+        # self.get_logger().info('kit complete:  %s' % self._kit_completed)
         if self._kit_completed:
             return 
+        
+        # self.get_logger().info(str(self.table1_msg)+" " +str(self.table2_msg)+" " +str(self.left_bin_msg)+" " + str(self.right_bin_msg))
         
         if ((not self.table1_msg) and (not self.table2_msg) and (not self.left_bin_msg) and (not self.right_bin_msg)) and self.parse_flag:
             ############ Order ##########
@@ -360,7 +400,8 @@ class rwa4(Node):
                                                                                                                     cur_tray_pose.orientation.w)
                             final_order_action.add_parts(part_type=cur_part.type,
                                                          part_color=cur_part.color,
-                                                         part_quadrant=cur_part.part_bin,
+                                                         part_quadrant=cur_part.quadrant,
+                                                         part_bin=part_parts.part_bin,
                                                          part_pose=cur_part_pose
                             )
                             output_part_string.append(output_part_n)
@@ -381,7 +422,7 @@ class rwa4(Node):
 
         # move robot home
         self.move_robot_home("floor_robot")
-        self._goto_tool_changer_client("floor_robot", final_order_action.tray_table, "trays")
+        self.goto_tool_changer("floor_robot", final_order_action.tray_table, "trays")
 
 def main(args=None):
     rclpy.init(args=args)
