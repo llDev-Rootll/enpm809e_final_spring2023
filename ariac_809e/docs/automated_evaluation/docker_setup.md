@@ -1,3 +1,0 @@
-# Docker Setup
-
-🚧 Coming soon 🚧
