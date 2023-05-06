@@ -1,9 +1,16 @@
 import rclpy
 from rclpy.node import Node
-
+from rclpy.parameter import Parameter
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from std_srvs.srv import Trigger
+from ariac_msgs.msg import CompetitionState
+from competitor_interfaces.msg import Robots as RobotsMsg
+from competitor_interfaces.srv import (
+    EnterToolChanger
+)
 from ariac_msgs.msg import Order
 from ariac_msgs.msg import AdvancedLogicalCameraImage
-from .datastructures import AriacOrder, PartPoses, TrayPoses
+from .datastructures import AriacOrder, PartPoses, TrayPoses, OrderActionParams
 
 
 class rwa4(Node):
@@ -55,7 +62,54 @@ class rwa4(Node):
         """
 
         super().__init__('rwa4')
+        sim_time = Parameter(
+            "use_sim_time",
+            rclpy.Parameter.Type.BOOL,
+            True
+        )
+        self.set_parameters([sim_time])
+        timer_group = MutuallyExclusiveCallbackGroup()
+        service_group = MutuallyExclusiveCallbackGroup()
 
+        self._kit_completed = False
+        self._competition_started = False
+        self._competition_state = None
+
+        self.create_subscription(CompetitionState, '/ariac/competition_state',
+                                 self._competition_state_cb, 1)
+        
+
+        #############################################################
+        # Service client for starting the competition
+        self._start_competition_client = self.create_client(Trigger, '/ariac/start_competition')
+
+        # Service client for moving the floor robot to the home position
+        self._move_floor_robot_home_client = self.create_client(
+            Trigger, '/competitor/floor_robot/go_home',
+            callback_group=service_group)
+        
+        # Service client for entering the gripper slot
+        self._goto_tool_changer_client = self.create_client(
+            EnterToolChanger, '/competitor/floor_robot/enter_tool_changer',
+            callback_group=service_group)
+        
+        self._retract_from_tool_changer_client
+        self._retract_from_agv_client
+
+        self._pickup_tray_client
+        self._move_tray_to_agv_client
+        self._place_tray_client
+        
+
+        self._pickup_part_client
+        self._move_part_to_agv_client
+        self._plave_part_in_agv_client
+
+        self._lock_agv_client
+        self._move_agv_to_warehouse_client
+
+
+        ##############################################################
         self.declare_parameter('order_id', rclpy.Parameter.Type.STRING)
         self._get_order_id = self.get_parameter('order_id').get_parameter_value().string_value
         
@@ -84,7 +138,7 @@ class rwa4(Node):
             AdvancedLogicalCameraImage, '/ariac/sensors/right_bins_camera/image',
             self.right_bin_callback, qos_policy)
 
-        self.timed_function = self.create_timer(0.1, self.robot_kitting)
+        self.timed_function = self.create_timer(1, self.parse_order,callback_group=timer_group)
 
         # Initiate the poses as None
         self.tray1_poses = None
@@ -95,8 +149,60 @@ class rwa4(Node):
 
 
         self.order_id_to_pick = None
-        self._kit_completed = False
+    
+    def move_robot_home(self, robot_name):
+        '''Move one of the robots to its home position.
 
+        Arguments:
+            robot_name -- Name of the robot to move home
+        '''
+        request = Trigger.Request()
+
+        if robot_name == 'floor_robot':
+            if not self._move_floor_robot_home_client.wait_for_service(timeout_sec=1.0):
+                self.get_logger().error('Robot commander node not running')
+                return
+
+            future = self._move_floor_robot_home_client.call_async(request)
+        else:
+            self.get_logger().error(f'Robot name: ({robot_name}) is not valid')
+            return
+
+        # Wait until the service call is completed
+        rclpy.spin_until_future_complete(self, future)
+
+        if future.result().success:
+            self.get_logger().info(f'Moved {robot_name} to home position')
+        else:
+            self.get_logger().warn(future.result().message)
+
+    def _competition_state_cb(self, msg: CompetitionState):
+        '''
+        /ariac/competition_state topic callback function
+
+        Args:
+            msg (CompetitionState): CompetitionState message
+        '''
+        self._competition_state = msg.competition_state
+
+    def start_competition(self):
+        '''
+        Start the competition
+        '''
+        self.get_logger().info('Waiting for competition state READY')
+
+        request = Trigger.Request()
+        future = self._start_competition_client.call_async(request)
+
+        # Wait until the service call is completed
+        rclpy.spin_until_future_complete(self, future)
+
+        if future.result().success:
+            self.get_logger().info('Started competition.')
+            self._competition_started = True
+        else:
+            self.get_logger().warn('Unable to start competition')
+    
     def orders_callback(self, msg):
         """
         Create AriacOrder object and enable message flags to read messgaes from other topics
@@ -112,7 +218,7 @@ class rwa4(Node):
                       ))
 
         if len(self.order) == 4:
-            self.order_id_to_pick = "2"
+            self.order_id_to_pick = self._get_order_id
             # enable the flags to log only the first message
             self.table1_msg = True
             self.table2_msg = True
@@ -131,7 +237,8 @@ class rwa4(Node):
 
         if self.table1_msg:
             self.tray1_poses = TrayPoses(tray_poses = msg.tray_poses,
-                            sensor_pose = msg.sensor_pose)
+                            sensor_pose = msg.sensor_pose,
+                            tray_table = "kts1")
             if self.tray1_poses and self.tray1_poses.poses and self.tray1_poses.sensor_pose and self.tray1_poses.ids:
                 self.table1_msg = False
 
@@ -145,7 +252,8 @@ class rwa4(Node):
 
         if self.table2_msg:
             self.tray2_poses = TrayPoses(tray_poses = msg.tray_poses,
-                            sensor_pose = msg.sensor_pose)
+                            sensor_pose = msg.sensor_pose,
+                            tray_table = "kts2")
             if self.tray2_poses and self.tray2_poses.poses and self.tray2_poses.sensor_pose and self.tray2_poses.ids:
                 self.table2_msg = False
                 
@@ -160,7 +268,8 @@ class rwa4(Node):
 
         if self.left_bin_msg:
             self.part1_poses = PartPoses(part_poses = msg.part_poses,
-                            sensor_pose = msg.sensor_pose)
+                            sensor_pose = msg.sensor_pose,
+                            part_bin = "left_bins")
             if self.part1_poses and self.part1_poses.poses and self.part1_poses.parts and self.part1_poses.sensor_pose:
                 self.left_bin_msg = False
 
@@ -174,16 +283,19 @@ class rwa4(Node):
 
         if self.right_bin_msg:
             self.part2_poses = PartPoses(part_poses = msg.part_poses,
-                            sensor_pose = msg.sensor_pose)
+                            sensor_pose = msg.sensor_pose,
+                            part_bin = "right_bins")
             if self.part2_poses and self.part2_poses.poses and self.part2_poses.parts and self.part2_poses.sensor_pose:
                 self.right_bin_msg = False
 
 
-    def robot_kitting(self):
+    def parse_order(self):
         """
         Print all the required information by parsing the objects created.
         Check if all the message flags are disabled and parse flag is enabled
         """
+        if self._competition_state == CompetitionState.READY and not self._competition_started:
+            self.start_competition()
 
         if self._kit_completed:
             return 
@@ -200,16 +312,25 @@ class rwa4(Node):
             all_tray_ids = [*self.tray1_poses.ids, *self.tray2_poses.ids]
             
             all_tray_poses = [*self.tray1_poses.poses, *self.tray2_poses.poses]
+            all_tray_tables = [*self.tray1_poses.tray_tables, *self.tray2_poses.tray_tables]
+
             tray_id = order_picked.kitting_task.tray_id
             cur_tray_pose = None
+            cur_tray_table = None
 
             for idx, t_id in enumerate(all_tray_ids):
                 if t_id == tray_id:
-                    cur_tray_pose = all_tray_poses[idx]
-                    break
 
-            assert cur_tray_pose is not None, "No trays matched tray ID in Order"
+                    cur_tray_table = all_tray_tables[idx]
+                    cur_tray_pose = all_tray_poses[idx]
+                    
+                    break
             
+            assert cur_tray_pose is not None, "No trays matched tray ID in Order"
+            final_order_action = OrderActionParams(tray_id=tray_id,
+                                                   tray_table=cur_tray_table,
+                                                   agv_number="agv{}".format(str(order_picked.kitting_task.agv_number)),
+                                                   )
             output_tray = "\n  - id: {} \n  - pose:\n    - position: [{}, {}, {}] \n    - orientation: [{}, {}, {}, {}]".format(tray_id, 
                                                                                                                   cur_tray_pose.position.x, 
                                                                                                                 cur_tray_pose.position.y, 
@@ -222,7 +343,6 @@ class rwa4(Node):
             all_part_parts = [*self.part1_poses.parts, *self.part2_poses.parts]
             all_part_poses = [*self.part1_poses.poses, *self.part2_poses.poses]
             output_part_string = []
-            output_part = {}
 
             for cur_part in order_picked.kitting_task.parts:
                 for part_idx, part_parts in enumerate(all_part_parts):
@@ -238,17 +358,30 @@ class rwa4(Node):
                                                                                                                     cur_part_pose.orientation.y, 
                                                                                                                     cur_part_pose.orientation.z,
                                                                                                                     cur_tray_pose.orientation.w)
-                            output_part["{} {}".format(self.color_dict[cur_part.color], self.type_dict[cur_part.type])] = cur_part_pose
+                            final_order_action.add_parts(part_type=cur_part.type,
+                                                         part_color=cur_part.color,
+                                                         part_quadrant=cur_part.part_bin,
+                                                         part_pose=cur_part_pose
+                            )
                             output_part_string.append(output_part_n)
                             break
                     
             part_string = "".join("{}".format(part) for part in output_part_string)
             output = "{} \nTray:{} \nPart:\n{}".format(output_order, output_tray, part_string)
-            # self.get_logger().info('%s' % output)
-            # print(output_part)
-            print("HERERE")
-            
+            self.get_logger().info("Order {} picked and parsed".format(order_picked.id))
+            self.get_logger().info('Order %s' % output)
             self.parse_flag = False
+
+            self.robot_kitting(final_order_action=final_order_action)
+
+            self._kit_completed = True
+
+            
+    def robot_kitting(self, final_order_action):
+
+        # move robot home
+        self.move_robot_home("floor_robot")
+        self._goto_tool_changer_client("floor_robot", final_order_action.tray_table, "trays")
 
 def main(args=None):
     rclpy.init(args=args)

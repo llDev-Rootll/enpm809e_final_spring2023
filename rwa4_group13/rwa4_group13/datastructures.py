@@ -26,6 +26,7 @@ class Part():
         self.color = part_color
         self.type = part_type
         self.quadrant = kwargs["part_quadrant"] if kwargs else None
+        self.part_bin = kwargs["part_bin"] if kwargs else None
     
     def __str__(self) -> str:
         """
@@ -287,7 +288,7 @@ class TrayPoses(WorldFrame):
         WorldFrame (Class): Used to convert tray poses to be with respect to world frame
     """
 
-    def __init__(self, tray_poses, sensor_pose) -> None:
+    def __init__(self, tray_poses, sensor_pose, tray_table) -> None:
         """
         Constructs all the necessary attributes for the TrayPoses object
         Converts tray poses to be with respect to world frame 
@@ -299,12 +300,14 @@ class TrayPoses(WorldFrame):
         
         self.ids = []
         self.poses = []
+        self.tray_tables = []
         for tray_pose in tray_poses:
 
             self.ids.append(tray_pose.id)
             tray_world_pose = self._multiply_pose(sensor_pose, tray_pose.pose)
             self.poses.append(ObjectPose(object_position = tray_world_pose.position,
                                         object_orientation = tray_world_pose.orientation))
+            self.tray_tables.append(tray_table)
         
         self.sensor_pose = ObjectPose(object_position = sensor_pose.position,
                                       object_orientation= sensor_pose.orientation)
@@ -329,7 +332,7 @@ class PartPoses(WorldFrame):
         WorldFrame (Class): Used to convert part poses to be with respect to world frame
     """
 
-    def __init__(self, part_poses, sensor_pose) -> None:
+    def __init__(self, part_poses, sensor_pose, part_bin) -> None:
         """        
         Constructs all the necessary attributes for the PartPoses object
         Converts part poses to be with respect to world frame 
@@ -345,7 +348,8 @@ class PartPoses(WorldFrame):
 
             part_world_pose = self._multiply_pose(sensor_pose, part_pose.pose)
             self.parts.append(Part(part_color = part_pose.part.color,
-                                   part_type = part_pose.part.type))
+                                   part_type = part_pose.part.type,
+                                   part_bin = part_bin))
             self.poses.append(ObjectPose(object_position = part_world_pose.position,
                                         object_orientation = part_world_pose.orientation))
         
@@ -362,3 +366,24 @@ class PartPoses(WorldFrame):
     
         output = "part_poses: \n"+"".join("{}/n{}".format(part.__str__(), pose.__str__()) for part, pose in zip(self.parts, self.poses)) + "\n\t".format(self.sensor_pose.__str__())
         return output
+
+
+class OrderActionParams():
+    
+    def __init__(self, tray_id, tray_table, agv_number) -> None:
+
+        self.tray_id = tray_id
+        self.tray_table = tray_table
+        self.agv_number = agv_number
+
+        self.parts = []
+
+    def add_parts(self, part_type, part_color, part_quadrant, part_bin, part_pose):
+
+        self.parts.append([part_type,
+                            part_color,
+                            part_quadrant,
+                            part_bin,
+                            part_pose])
+
+
