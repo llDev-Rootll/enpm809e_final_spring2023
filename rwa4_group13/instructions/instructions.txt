@@ -1,0 +1,7 @@
+To run the node to listen to the orders and the object information:
+
+ros2 run rwa4_group13 listener
+
+To run the simulation:
+
+ros2 launch ariac_gazebo ariac.launch.py trial_name:=kitting
