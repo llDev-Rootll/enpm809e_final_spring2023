@@ -1,6 +1,7 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 
 from competitor_interfaces.msg import Robots as RobotsMsg
@@ -80,14 +81,57 @@ class rwa4(Node):
         self._competition_started = False
         self._competition_state = None
 
-        self.create_subscription(CompetitionState, '/ariac/competition_state',
-                                 self._competition_state_cb, 1)
+        # self.create_subscription(CompetitionState, '/ariac/competition_state',
+        #                          self._competition_state_cb, 1)
         
+        # self._robot_action_timer = self.create_timer(1, self._robot_action_timer_callback,
+                                                    #  callback_group=timer_group)
+
+        # self.timed_function = self.create_timer(1, self.parse_order, callback_group=timer_group)
 
         #############################################################
         # Service client for starting the competition
-        self._start_competition_client = self.create_client(Trigger, '/ariac/start_competition')
+        # self._start_competition_client = self.create_client(Trigger, '/ariac/start_competition')
 
+        ##############################################################
+        self.declare_parameter('order_id', rclpy.Parameter.Type.STRING)
+        self._get_order_id = self.get_parameter('order_id').get_parameter_value().string_value
+        
+        self.get_logger().info('Get order: %s' % self._get_order_id)
+
+        qos_policy = rclpy.qos.QoSProfile(reliability=rclpy.qos.ReliabilityPolicy.BEST_EFFORT,
+                                          history=rclpy.qos.HistoryPolicy.KEEP_LAST,
+                                          depth=1)
+        
+        self.orders_sub = self.create_subscription(
+            Order, '/ariac/orders', self.orders_callback, 10)
+        
+        self.table1_sub = self.create_subscription(
+            AdvancedLogicalCameraImage, '/ariac/sensors/table1_camera/image',
+            self.table1_callback, qos_policy)
+        
+        self.table2_sub = self.create_subscription(
+            AdvancedLogicalCameraImage, '/ariac/sensors/table2_camera/image',
+            self.table2_callback, qos_policy)
+        
+        self.left_bin_sub = self.create_subscription(
+            AdvancedLogicalCameraImage, '/ariac/sensors/left_bins_camera/image',
+            self.left_bin_callback, qos_policy)
+        
+        self.right_bin_sub = self.create_subscription(
+            AdvancedLogicalCameraImage, '/ariac/sensors/right_bins_camera/image',
+            self.right_bin_callback, qos_policy)
+
+        # Initiate the poses as None
+        self.tray1_poses = None
+        self.tray2_poses = None
+        self.part1_poses = None
+        self.part2_poses = None
+        self.order = []
+
+        self.order_id_to_pick = None
+
+        self.timed_function = self.create_timer(0.5, self.parse_order)
         # Service client for moving the floor robot to the home position
         self._move_floor_robot_home_client = self.create_client(
             Trigger, '/competitor/floor_robot/go_home',
@@ -130,14 +174,6 @@ class rwa4(Node):
             PlacePartInTray, '/competitor/floor_robot/place_part_in_tray',
             callback_group=self.service_group)
         
-        # self._lock_agv_client = self.create_client(
-        #     Trigger, '/ariac/agv_lock_tray',
-        #     callback_group=self.service_group)
-        
-        # self._move_agv_to_warehouse_client = self.create_client(
-        #     MoveAGV, '/ariac/move_agvX',
-        #     callback_group=self.service_group)
-        
         self._change_robot_gripper_client = self.create_client(
             ChangeGripper, '/ariac/floor_robot_change_gripper',
             callback_group=self.service_group)
@@ -145,122 +181,6 @@ class rwa4(Node):
         self._enable_robot_gripper_client = self.create_client(
             VacuumGripperControl, '/ariac/floor_robot_enable_gripper',
             callback_group=self.service_group)
-
-        ##############################################################
-        self.declare_parameter('order_id', rclpy.Parameter.Type.STRING)
-        self._get_order_id = self.get_parameter('order_id').get_parameter_value().string_value
-        
-        self.get_logger().info('Get order: %s' % self._get_order_id)
-
-        qos_policy = rclpy.qos.QoSProfile(reliability=rclpy.qos.ReliabilityPolicy.BEST_EFFORT,
-                                          history=rclpy.qos.HistoryPolicy.KEEP_LAST,
-                                          depth=1)
-        
-        self.orders_sub = self.create_subscription(
-            Order, '/ariac/orders', self.orders_callback, 10)
-        
-        self.table1_sub = self.create_subscription(
-            AdvancedLogicalCameraImage, '/ariac/sensors/table1_camera/image',
-            self.table1_callback, qos_policy)
-        
-        self.table2_sub = self.create_subscription(
-            AdvancedLogicalCameraImage, '/ariac/sensors/table2_camera/image',
-            self.table2_callback, qos_policy)
-        
-        self.left_bin_sub = self.create_subscription(
-            AdvancedLogicalCameraImage, '/ariac/sensors/left_bins_camera/image',
-            self.left_bin_callback, qos_policy)
-        
-        self.right_bin_sub = self.create_subscription(
-            AdvancedLogicalCameraImage, '/ariac/sensors/right_bins_camera/image',
-            self.right_bin_callback, qos_policy)
-
-        # self.timed_function = self.create_timer(1, self.parse_order,callback_group=timer_group)
-        self.timed_function = self.create_timer(0.1, self.parse_order)
-
-        # Initiate the poses as None
-        self.tray1_poses = None
-        self.tray2_poses = None
-        self.part1_poses = None
-        self.part2_poses = None
-        self.order = []
-
-
-        self.order_id_to_pick = None
-    
-    def _competition_state_cb(self, msg: CompetitionState):
-        '''
-        /ariac/competition_state topic callback function
-
-        Args:
-            msg (CompetitionState): CompetitionState message
-        '''
-        self._competition_state = msg.competition_state
-
-    def start_competition(self):
-        '''
-        Start the competition
-        '''
-        self.get_logger().info('Waiting for competition state READY')
-
-        request = Trigger.Request()
-        future = self._start_competition_client.call_async(request)
-
-        # Wait until the service call is completed
-        rclpy.spin_until_future_complete(self, future)
-
-        if future.result().success:
-            self.get_logger().info('Started competition.')
-            self._competition_started = True
-        else:
-            self.get_logger().warn('Unable to start competition')
-    
-    def change_robot_gripper(self, gripper_type):
-        
-        request = ChangeGripper.Request()
-        if gripper_type == "part":
-            request.gripper_type = ChangeGripper.Request.PART_GRIPPER
-        else:
-            request.gripper_type = ChangeGripper.Request.TRAY_GRIPPER
-
-        future = self._change_robot_gripper_client.call_async(request)
-
-        try:
-            rclpy.spin_until_future_complete(self, future)
-        except KeyboardInterrupt as kb_error:
-            raise KeyboardInterrupt from kb_error
-
-        if future.result() is not None:
-            response = future.result()
-            if response:
-                self.get_logger().info('Robot gripper changed to {}'.format(gripper_type))
-        else:
-            self.get_logger().error(f'Service call failed {future.exception()}')
-            self.get_logger().error('Unable to change gripper')
-    
-    def set_robot_gripper_state(self, state):
-        
-        request = VacuumGripperControl.Request()
-
-        request.enable = state
-
-        future = self._enable_robot_gripper_client.call_async(request)
-
-        try:
-            rclpy.spin_until_future_complete(self, future)
-        except KeyboardInterrupt as kb_error:
-            raise KeyboardInterrupt from kb_error
-
-        if future.result() is not None:
-            response = future.result()
-            if response:
-                if state:
-                    self.get_logger().info('Robot gripper state enabled')
-                else:
-                    self.get_logger().info('Robot gripper state disabled')
-        else:
-            self.get_logger().error(f'Service call failed {future.exception()}')
-            self.get_logger().error('Unable to change gripper state')
 
     def move_robot_home(self, robot_name):
         '''Move one of the robots to its home position.
@@ -355,6 +275,54 @@ class rwa4(Node):
         else:
             self.get_logger().error(f'Service call failed {future.exception()}')
             self.get_logger().error('Unable to retract the robot from the tool changer')
+
+    def change_robot_gripper(self, gripper_type):
+
+        request = ChangeGripper.Request()
+        if gripper_type == "part":
+            request.gripper_type = ChangeGripper.Request.PART_GRIPPER
+        else:
+            request.gripper_type = ChangeGripper.Request.TRAY_GRIPPER
+
+        future = self._change_robot_gripper_client.call_async(request)
+
+        try:
+            rclpy.spin_until_future_complete(self, future)
+        except KeyboardInterrupt as kb_error:
+            raise KeyboardInterrupt from kb_error
+
+        if future.result() is not None:
+            response = future.result()
+            if response:
+                self.get_logger().info('Robot gripper changed to {}'.format(gripper_type))
+        else:
+            self.get_logger().error(f'Service call failed {future.exception()}')
+            self.get_logger().error('Unable to change gripper')
+
+    def set_robot_gripper_state(self, state):
+
+        request = VacuumGripperControl.Request()
+
+        request.enable = state
+
+        future = self._enable_robot_gripper_client.call_async(request)
+
+        try:
+            rclpy.spin_until_future_complete(self, future)
+        except KeyboardInterrupt as kb_error:
+            raise KeyboardInterrupt from kb_error
+
+        if future.result() is not None:
+            response = future.result()
+            if response:
+                if state:
+                    self.get_logger().info('Robot gripper state enabled')
+                else:
+                    self.get_logger().info('Robot gripper state disabled')
+        else:
+            self.get_logger().error(f'Service call failed {future.exception()}')
+            self.get_logger().error('Unable to change gripper state')
+
 
     def pickup_tray(self, robot, tray_id, tray_pose, tray_table):
 
@@ -617,6 +585,8 @@ class rwa4(Node):
                       order_priority = msg.priority,
                       kitting_task = msg.kitting_task
                       ))
+        
+        self.get_logger().info('Order Incoming!{}'.format(msg.id))
 
         if len(self.order) == 4:
             self.order_id_to_pick = self._get_order_id
@@ -689,6 +659,36 @@ class rwa4(Node):
             if self.part2_poses and self.part2_poses.poses and self.part2_poses.parts and self.part2_poses.sensor_pose:
                 self.right_bin_msg = False
 
+    # def _competition_state_cb(self, msg: CompetitionState):
+    #     '''
+    #     /ariac/competition_state topic callback function
+
+    #     Args:
+    #         msg (CompetitionState): CompetitionState message
+    #     '''
+    #     self._competition_state = msg.competition_state
+    #     self.get_logger().info("_competition_state: {}".format(self._competition_state))
+
+    # def start_competition(self):
+    #     '''
+    #     Start the competition
+    #     '''
+    #     self.get_logger().info('Waiting for competition state READY')
+
+    #     request = Trigger.Request()
+    #     future = self._start_competition_client.call_async(request)
+    #     self.get_logger().info('request, future')
+
+    #     # Wait until the service call is completed
+    #     rclpy.spin_until_future_complete(self, future)
+    #     self.get_logger().info('spin_until_future_complete')
+    #     # future.add_done_callback(self.orders_callback)
+        
+    #     if future.result().success:
+    #         self.get_logger().info('Started competition.')
+    #         self._competition_started = True
+    #     else:
+    #         self.get_logger().warn('Unable to start competition')
 
     def parse_order(self):
         """
@@ -698,8 +698,10 @@ class rwa4(Node):
         # if self._competition_state == CompetitionState.READY and not self._competition_started:
         #     self.start_competition()
 
-        if self._kit_completed:
-            return 
+        # # exit the callback if the kit is completed
+        # if self._kit_completed:
+        #     self.get_logger().info('kit completed')
+        #     return
         
         if ((not self.table1_msg) and (not self.table2_msg) and (not self.left_bin_msg) and (not self.right_bin_msg)) and self.parse_flag:
             ############ Order ##########
@@ -812,7 +814,7 @@ class rwa4(Node):
 
         # for loop to go through all the parts
         for cur_part in final_order_action.parts:
-            
+
             # pick and place purple pump
             self.pickup_part("floor_robot", cur_part[4], cur_part[0], cur_part[1], "right_bins")
             self.move_part_to_agv("floor_robot", cur_part[4], final_order_action.agv_number, cur_part[2])
@@ -829,7 +831,10 @@ class rwa4(Node):
 def main(args=None):
     rclpy.init(args=args)
     my_node = rwa4()
-    rclpy.spin(my_node)
+    try:
+        rclpy.spin(my_node)
+    except KeyboardInterrupt:
+        pass
     my_node.destroy_node()
     rclpy.shutdown()
 

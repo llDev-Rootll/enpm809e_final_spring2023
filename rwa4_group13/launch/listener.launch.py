@@ -24,6 +24,11 @@ def generate_launch_description():
                         executable="listener", # executable as set in setup.py
                         parameters=[parameter_file]
                         )
-
+    # start_node = Node( # declare your Node
+    #                     package="rwa4_group13", # package name
+    #                     executable="start_comp", # executable as set in setup.py
+    #                     parameters=[parameter_file]
+    #                     )
     launch_description.add_action(subscriber_node) # add each Node to the LaunchDescription object
+    # launch_description.add_action(start_node) # add each Node to the LaunchDescription object
     return launch_description # return the LaunchDescription object 

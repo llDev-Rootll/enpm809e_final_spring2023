@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'listener = rwa4_group13.orders_sub:main',
+            'start_comp = rwa4_group13.start_competition:main',
         ],
     },
     
