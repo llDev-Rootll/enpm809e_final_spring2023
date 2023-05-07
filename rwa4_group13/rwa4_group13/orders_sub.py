@@ -214,7 +214,54 @@ class rwa4(Node):
             self._competition_started = True
         else:
             self.get_logger().warn('Unable to start competition')
-     
+    
+    def change_robot_gripper(self, gripper_type):
+        
+        request = ChangeGripper.Request()
+        if gripper_type == "part":
+            request.gripper_type = ChangeGripper.Request.PART_GRIPPER
+        else:
+            request.gripper_type = ChangeGripper.Request.TRAY_GRIPPER
+
+        future = self._change_robot_gripper_client.call_async(request)
+
+        try:
+            rclpy.spin_until_future_complete(self, future)
+        except KeyboardInterrupt as kb_error:
+            raise KeyboardInterrupt from kb_error
+
+        if future.result() is not None:
+            response = future.result()
+            if response:
+                self.get_logger().info('Robot gripper changed to {}'.format(gripper_type))
+        else:
+            self.get_logger().error(f'Service call failed {future.exception()}')
+            self.get_logger().error('Unable to change gripper')
+    
+    def set_robot_gripper_state(self, state):
+        
+        request = VacuumGripperControl.Request()
+
+        request.enable = state
+
+        future = self._enable_robot_gripper_client.call_async(request)
+
+        try:
+            rclpy.spin_until_future_complete(self, future)
+        except KeyboardInterrupt as kb_error:
+            raise KeyboardInterrupt from kb_error
+
+        if future.result() is not None:
+            response = future.result()
+            if response:
+                if state:
+                    self.get_logger().info('Robot gripper state enabled')
+                else:
+                    self.get_logger().info('Robot gripper state disabled')
+        else:
+            self.get_logger().error(f'Service call failed {future.exception()}')
+            self.get_logger().error('Unable to change gripper state')
+
     def move_robot_home(self, robot_name):
         '''Move one of the robots to its home position.
 
@@ -334,7 +381,8 @@ class rwa4(Node):
         if future.result() is not None:
             response = future.result()
             if response:
-                self.get_logger().info('Robot is picking up tray {}'.format(tray_id) )
+                self.get_logger().info('Robot is picking up tray {}'.format(tray_id))
+                self.set_robot_gripper_state(True)
         else:
             self.get_logger().error(f'Service call failed {future.exception()}')
             self.get_logger().error('Unable to pick tray {} by the robot'.format(tray_id))
@@ -391,6 +439,7 @@ class rwa4(Node):
             response = future.result()
             if response:
                 self.get_logger().info('Robot is placing the tray')
+                self.set_robot_gripper_state(False)
         else:
             self.get_logger().error(f'Service call failed {future.exception()}')
             self.get_logger().error('Unable to place the tray by the robot')
@@ -448,6 +497,7 @@ class rwa4(Node):
             response = future.result()
             if response:
                 self.get_logger().info('Robot is picking part')
+                self.set_robot_gripper_state(True)
         else:
             self.get_logger().error(f'Service call failed {future.exception()}')
             self.get_logger().error('Unable to pick part')     
@@ -505,6 +555,7 @@ class rwa4(Node):
             response = future.result()
             if response:
                 self.get_logger().info('Robot is placing part in tray')
+                self.set_robot_gripper_state(False)
         else:
             self.get_logger().error(f'Service call failed {future.exception()}')
             self.get_logger().error('Unable to place part in tray')  
@@ -745,6 +796,7 @@ class rwa4(Node):
         
         # change gripper type
         self.goto_tool_changer("floor_robot", final_order_action.tray_table, "trays")
+        self.change_robot_gripper("tray")
         self.retract_from_tool_changer("floor_robot", final_order_action.tray_table, "trays")
 
         # pick and place tray
@@ -753,12 +805,14 @@ class rwa4(Node):
         self.place_tray("floor_robot", final_order_action.tray_id, final_order_action.agv_number)
         self.retract_from_agv("floor_robot", final_order_action.agv_number)
 
+        # change gripper to pick up parts
+        self.goto_tool_changer("floor_robot", final_order_action.tray_table, "parts")
+        self.change_robot_gripper("part")
+        self.retract_from_tool_changer("floor_robot", final_order_action.tray_table, "parts")
+
         # for loop to go through all the parts
         for cur_part in final_order_action.parts:
-            # change gripper to pick up parts
-            self.goto_tool_changer("floor_robot", final_order_action.tray_table, "parts")
-            self.retract_from_tool_changer("floor_robot", final_order_action.tray_table, "parts")
-
+            
             # pick and place purple pump
             self.pickup_part("floor_robot", cur_part[4], cur_part[0], cur_part[1], "right_bins")
             self.move_part_to_agv("floor_robot", cur_part[4], final_order_action.agv_number, cur_part[2])
