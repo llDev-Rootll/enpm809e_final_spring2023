@@ -770,7 +770,7 @@ class rwa4(Node):
 
         # move agv to warehouse
         self.lock_agv()
-        self.move_agv_to_warehouse(3)
+        self.move_agv_to_warehouse(final_order_action.destination)
 
 def main(args=None):
     rclpy.init(args=args)
