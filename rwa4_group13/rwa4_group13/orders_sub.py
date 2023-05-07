@@ -7,7 +7,7 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from competitor_interfaces.msg import Robots as RobotsMsg
 from ariac_msgs.msg import (Order, CompetitionState)
 from ariac_msgs.msg import AdvancedLogicalCameraImage
-
+from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from ariac_msgs.srv import (MoveAGV, ChangeGripper, VacuumGripperControl)
 from competitor_interfaces.srv import (
@@ -74,7 +74,7 @@ class rwa4(Node):
             True
         )
         self.set_parameters([sim_time])
-        timer_group = MutuallyExclusiveCallbackGroup()
+        self.timer_group = MutuallyExclusiveCallbackGroup()
         self.service_group = MutuallyExclusiveCallbackGroup()
 
         self._kit_completed = False
@@ -131,7 +131,7 @@ class rwa4(Node):
 
         self.order_id_to_pick = None
 
-        self.timed_function = self.create_timer(0.5, self.parse_order)
+        self.timed_function = self.create_timer(0.5, self.parse_order, callback_group=self.timer_group)
         # Service client for moving the floor robot to the home position
         self._move_floor_robot_home_client = self.create_client(
             Trigger, '/competitor/floor_robot/go_home',
@@ -181,7 +181,16 @@ class rwa4(Node):
         self._enable_robot_gripper_client = self.create_client(
             VacuumGripperControl, '/ariac/floor_robot_enable_gripper',
             callback_group=self.service_group)
+        
+        self.publisher_ = self.create_publisher(String, 'order_node/status', 10)
+        self.node_ready = self.create_timer(0.5, self.ready_callback)
 
+    def ready_callback(self):
+        msg = String()
+        msg.data = 'READY' 
+        self.publisher_.publish(msg)
+        # self.get_logger().info('Publishing: "%s"' % msg.data)
+        # self.i += 1
     def move_robot_home(self, robot_name):
         '''Move one of the robots to its home position.
 

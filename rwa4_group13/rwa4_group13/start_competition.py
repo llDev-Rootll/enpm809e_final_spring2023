@@ -8,7 +8,8 @@ from competitor_interfaces.msg import Robots as RobotsMsg
 from competitor_interfaces.srv import (
     EnterToolChanger
 )
-
+import time
+from std_msgs.msg import String
 from rclpy.executors import MultiThreadedExecutor
 
 class StartCompetition(Node):
@@ -37,9 +38,10 @@ class StartCompetition(Node):
         service_group = MutuallyExclusiveCallbackGroup()
 
         # Flag to indicate if the kit has been completed
-        self._kit_completed = False
+
         self._competition_started = False
         self._competition_state = None
+        self._order_node_state = False
 
         # subscriber
         self.create_subscription(CompetitionState, '/ariac/competition_state',
@@ -51,6 +53,11 @@ class StartCompetition(Node):
 
         # Service client for starting the competition
         self._start_competition_client = self.create_client(Trigger, '/ariac/start_competition')        
+        self.subscription = self.create_subscription(String,'order_node/status', self.listener_callback, 10)
+
+    def listener_callback(self, msg):
+        if msg.data == "READY":
+            self._order_node_state = True
 
     def _competition_state_cb(self, msg: CompetitionState):
         '''
@@ -65,14 +72,16 @@ class StartCompetition(Node):
         '''
         Callback for the timer that triggers the robot actions
         '''
+        if self._order_node_state:
+            self.get_logger().info("Waiting for 3 seconds before starting competition")
+            time.sleep(3)
+            if self._competition_state == CompetitionState.READY and not self._competition_started:
+                self.start_competition()
 
-        if self._competition_state == CompetitionState.READY and not self._competition_started:
-            self.start_competition()
-
-        if self._competition_started:
-            self.get_logger().info("destroy start node")
-            self.destroy_node()
-            return
+            if self._competition_started:
+                self.get_logger().info("Destroying start node")
+                self.destroy_node()
+                return
 
 
     def start_competition(self):
