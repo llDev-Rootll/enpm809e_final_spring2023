@@ -189,6 +189,7 @@ class TrayPoses(WorldFrame):
         Args:
             tray_poses (list): Information on trays that are detected by the camera
             sensor_pose (Pose): Pose of the camera in the world frame
+            tray_table (str): kts1/kts2, The table where tray is placed 
         """
         
         self.ids = []
@@ -234,8 +235,26 @@ class PartPoses(WorldFrame):
         self.sensor_pose = sensor_pose
 
 class OrderActionParams():
+    """
+    Class to instantiate OrderActionParams attributes
+
+    Methods
+    -------
+    add_parts(part_type, part_color, part_quadrant, part_bin, part_pose)
+        Add part information in the parts list 
+
+    """
     
     def __init__(self, tray_id, tray_table, tray_pose, agv_number, destination) -> None:
+        """Constructs all the necessary attributes for the OrderActionParams object
+
+        Args:
+            tray_id (int): The tray to use to build the kit
+            tray_table (str): kts1/kts2, The table where tray is placed 
+            tray_pose (Pose): Tray pose to be with respect to world frame 
+            agv_number (str): The AGV to use to build the kit (1, 2, 3, or 4)
+            destination (int): The destination to send the AGV when the kit is complete.
+        """
 
         self.tray_id = tray_id
         self.tray_table = tray_table
@@ -246,6 +265,16 @@ class OrderActionParams():
         self.parts = []
 
     def add_parts(self, part_type, part_color, part_quadrant, part_bin, part_pose):
+        """
+        Append part information in the parts list
+
+        Args:
+            part_type (int): The type of the part
+            part_color (int): The color of the part
+            part_quadrant (int): The location of the part within the tray
+            part_bin (str): Left/Right corresponds to which camera sees the part
+            part_pose (Pose): Pose of the part in the world frame
+        """
 
         self.parts.append([part_type,
                             part_color,

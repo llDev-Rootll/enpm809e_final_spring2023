@@ -1,20 +1,16 @@
+import time
 import rclpy
 from rclpy.node import Node
-from rclpy.parameter import Parameter
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
-from std_srvs.srv import Trigger
-from ariac_msgs.msg import CompetitionState
-from competitor_interfaces.msg import Robots as RobotsMsg
-from competitor_interfaces.srv import (
-    EnterToolChanger
-)
-import time
 from std_msgs.msg import String
+from std_srvs.srv import Trigger
+from rclpy.parameter import Parameter
+from ariac_msgs.msg import CompetitionState
 from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 
 class StartCompetition(Node):
     '''
-    Class for a robot commander node.
+    Class for a Start Competition node.
 
     Args:
         Node (rclpy.node.Node): Parent class for ROS nodes
@@ -27,18 +23,16 @@ class StartCompetition(Node):
         super().__init__('competition_interface')
 
         sim_time = Parameter(
-            "use_sim_time",
-            rclpy.Parameter.Type.BOOL,
-            True
-        )
+                    "use_sim_time",
+                    rclpy.Parameter.Type.BOOL,
+                    True
+                )
 
         self.set_parameters([sim_time])
 
         timer_group = MutuallyExclusiveCallbackGroup()
-        service_group = MutuallyExclusiveCallbackGroup()
 
         # Flag to indicate if the kit has been completed
-
         self._competition_started = False
         self._competition_state = None
         self._order_node_state = False
@@ -48,7 +42,7 @@ class StartCompetition(Node):
                                  self._competition_state_cb, 1)
 
         # timer
-        self._robot_action_timer = self.create_timer(1, self._robot_action_timer_callback,
+        self._competition_timer = self.create_timer(1, self._competition_timer_callback,
                                                      callback_group=timer_group)
 
         # Service client for starting the competition
@@ -56,6 +50,12 @@ class StartCompetition(Node):
         self.subscription = self.create_subscription(String,'order_node/status', self.listener_callback, 10)
 
     def listener_callback(self, msg):
+        """
+        order_node/status topic callback function
+
+        Args:
+            msg (String): Indicates if the order_node is ready to be initialized
+        """
         if msg.data == "READY":
             self._order_node_state = True
 
@@ -68,9 +68,9 @@ class StartCompetition(Node):
         '''
         self._competition_state = msg.competition_state
 
-    def _robot_action_timer_callback(self):
+    def _competition_timer_callback(self):
         '''
-        Callback for the timer that triggers the robot actions
+        Callback for the timer that initialized compeition
         '''
         if self._order_node_state:
             self.get_logger().info("Waiting for 3 seconds before starting competition")
@@ -82,7 +82,6 @@ class StartCompetition(Node):
                 self.get_logger().info("Destroying start node")
                 self.destroy_node()
                 return
-
 
     def start_competition(self):
         '''

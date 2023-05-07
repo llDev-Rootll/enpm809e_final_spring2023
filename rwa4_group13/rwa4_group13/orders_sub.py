@@ -81,24 +81,17 @@ class rwa4(Node):
         self._competition_started = False
         self._competition_state = None
 
-        # self.create_subscription(CompetitionState, '/ariac/competition_state',
-        #                          self._competition_state_cb, 1)
+        ####################### Publisher for synchronizing with the start competition node ###########
+        self.publisher_ = self.create_publisher(String, 'order_node/status', 10)
+        self.node_ready = self.create_timer(0.5, self.ready_callback)
         
-        # self._robot_action_timer = self.create_timer(1, self._robot_action_timer_callback,
-                                                    #  callback_group=timer_group)
-
-        # self.timed_function = self.create_timer(1, self.parse_order, callback_group=timer_group)
-
-        #############################################################
-        # Service client for starting the competition
-        # self._start_competition_client = self.create_client(Trigger, '/ariac/start_competition')
-
-        ##############################################################
+        ######################### Parse Order ID required #####################################
         self.declare_parameter('order_id', rclpy.Parameter.Type.STRING)
         self._get_order_id = self.get_parameter('order_id').get_parameter_value().string_value
         
         self.get_logger().info('Get order: %s' % self._get_order_id)
 
+        ############################ Initialize Topic Subscribers ##################################
         qos_policy = rclpy.qos.QoSProfile(reliability=rclpy.qos.ReliabilityPolicy.BEST_EFFORT,
                                           history=rclpy.qos.HistoryPolicy.KEEP_LAST,
                                           depth=1)
@@ -121,17 +114,20 @@ class rwa4(Node):
         self.right_bin_sub = self.create_subscription(
             AdvancedLogicalCameraImage, '/ariac/sensors/right_bins_camera/image',
             self.right_bin_callback, qos_policy)
-
-        # Initiate the poses as None
+        
+        ############################ Initiate the poses ##################################
         self.tray1_poses = None
         self.tray2_poses = None
         self.part1_poses = None
         self.part2_poses = None
         self.order = []
-
         self.order_id_to_pick = None
 
+        ################### Initialize Timer Callback for the Order ######################
         self.timed_function = self.create_timer(0.5, self.parse_order, callback_group=self.timer_group)
+
+        ############################ Initialize Service Clients ##########################
+
         # Service client for moving the floor robot to the home position
         self._move_floor_robot_home_client = self.create_client(
             Trigger, '/competitor/floor_robot/go_home',
@@ -142,61 +138,70 @@ class rwa4(Node):
             EnterToolChanger, '/competitor/floor_robot/enter_tool_changer',
             callback_group=self.service_group)
         
+        # Service client for retracting from the gripper slot
         self._retract_from_tool_changer_client = self.create_client(
             ExitToolChanger, '/competitor/floor_robot/exit_tool_changer',
             callback_group=self.service_group)
         
+        # Service client for retracting from agv
         self._retract_from_agv_client = self.create_client(
             RetractFromAGV, '/competitor/floor_robot/retract_from_agv',
             callback_group=self.service_group)
 
+        # Service client for picking tray
         self._pickup_tray_client = self.create_client(
             PickupTray, '/competitor/floor_robot/pickup_tray',
             callback_group=self.service_group)
         
+        # Service client for moving tray
         self._move_tray_to_agv_client = self.create_client(
             MoveTrayToAGV, '/competitor/floor_robot/move_tray_to_agv',
             callback_group=self.service_group)
         
+        # Service client for placing tray
         self._place_tray_client = self.create_client(
             PlaceTrayOnAGV, '/competitor/floor_robot/place_tray_on_agv',
             callback_group=self.service_group)
         
+        # Service client for picking tray
         self._pickup_part_client = self.create_client(
             PickupPart, '/competitor/floor_robot/pickup_part',
             callback_group=self.service_group)
         
+        # Service client for moving part
         self._move_part_to_agv_client = self.create_client(
             MovePartToAGV, '/competitor/floor_robot/move_part_to_agv',
             callback_group=self.service_group)
         
+        # Service client for placing part
         self._place_part_in_agv_client = self.create_client(
             PlacePartInTray, '/competitor/floor_robot/place_part_in_tray',
             callback_group=self.service_group)
         
+        # Service client for changing gripper
         self._change_robot_gripper_client = self.create_client(
             ChangeGripper, '/ariac/floor_robot_change_gripper',
             callback_group=self.service_group)
         
+        # Service client for enabling gripper
         self._enable_robot_gripper_client = self.create_client(
             VacuumGripperControl, '/ariac/floor_robot_enable_gripper',
             callback_group=self.service_group)
         
-        self.publisher_ = self.create_publisher(String, 'order_node/status', 10)
-        self.node_ready = self.create_timer(0.5, self.ready_callback)
 
-    def ready_callback(self):
-        msg = String()
-        msg.data = 'READY' 
-        self.publisher_.publish(msg)
-        # self.get_logger().info('Publishing: "%s"' % msg.data)
-        # self.i += 1
+    #######################################################################
+    ######################### To call Service client ######################
+    #######################################################################
     def move_robot_home(self, robot_name):
-        '''Move one of the robots to its home position.
+        '''
+        Move one of the robots to its home position.
 
         Arguments:
             robot_name -- Name of the robot to move home
         '''
+
+        self.get_logger().info('Move robot to home service called')
+
         request = Trigger.Request()
 
         if robot_name == 'floor_robot':
@@ -229,7 +234,7 @@ class rwa4(Node):
             KeyboardInterrupt: Exception raised when the user presses Ctrl+C
         '''
 
-        self.get_logger().info('Move inside gripper slot service called')
+        self.get_logger().info('Move inside gripper slot service called for {}'.format(gripper_type))
 
         request = EnterToolChanger.Request()
 
@@ -251,14 +256,25 @@ class rwa4(Node):
         if future.result() is not None:
             response = future.result()
             if response:
-                self.get_logger().info('Robot is at the tool changer')
+                self.get_logger().info('Robot is at the tool changer for {}'.format(gripper_type))
         else:
             self.get_logger().error(f'Service call failed {future.exception()}')
             self.get_logger().error('Unable to move the robot to the tool changer')
 
     def retract_from_tool_changer(self, robot, station, gripper_type):
+        """ Retract robot gripper from the gripper slot
 
-        self.get_logger().info('Retract robot gripper service called')
+        Args:
+            robot (str): Robot name
+            station (str): Gripper station name
+            gripper_type (str): Gripper type
+
+        Raises:
+            ValueError: Error raised if robot is invalid
+            KeyboardInterrupt: Exception raised when the user presses Ctrl+C
+        """
+
+        self.get_logger().info('Retract robot gripper service called for {}'.format(gripper_type))
 
         request = ExitToolChanger.Request()
 
@@ -280,12 +296,23 @@ class rwa4(Node):
         if future.result() is not None:
             response = future.result()
             if response:
-                self.get_logger().info('Robot is retracting from the tool changer')
+                self.get_logger().info('Robot is retracting from the tool changer for {}'.format(gripper_type))
         else:
             self.get_logger().error(f'Service call failed {future.exception()}')
             self.get_logger().error('Unable to retract the robot from the tool changer')
 
     def change_robot_gripper(self, gripper_type):
+        """
+        Change robot gripper
+
+        Args:
+            gripper_type (str): Gripper type
+
+        Raises:
+            KeyboardInterrupt: Exception raised when the user presses Ctrl+C
+        """
+
+        self.get_logger().info('Change robot gripper service called for {}'.format(gripper_type))
 
         request = ChangeGripper.Request()
         if gripper_type == "part":
@@ -309,11 +336,20 @@ class rwa4(Node):
             self.get_logger().error('Unable to change gripper')
 
     def set_robot_gripper_state(self, state):
+        """
+        Enable/Disable gripper suction
+
+        Args:
+            state (bool): Flag to Enable/Disable gripper suction
+
+        Raises:
+            KeyboardInterrupt: Exception raised when the user presses Ctrl+C
+        """
+
+        self.get_logger().info('Set robot gripper status service called')
 
         request = VacuumGripperControl.Request()
-
         request.enable = state
-
         future = self._enable_robot_gripper_client.call_async(request)
 
         try:
@@ -334,6 +370,19 @@ class rwa4(Node):
 
 
     def pickup_tray(self, robot, tray_id, tray_pose, tray_table):
+        """
+        Pick up a tray from a kitting station
+
+        Args:
+            robot (str): Robot name
+            tray_id (int): ID of the tray to be picked up
+            tray_pose (Pose): pose of the tray in the world frame
+            tray_table (str): Tray station: kts1 or kts2
+
+        Raises:
+            ValueError: Error raised if robot is invalid
+            KeyboardInterrupt: Exception raised when the user presses Ctrl+C
+        """
 
         self.get_logger().info('Pick up tray service called')
 
@@ -358,14 +407,28 @@ class rwa4(Node):
         if future.result() is not None:
             response = future.result()
             if response:
-                self.get_logger().info('Robot is picking up tray {}'.format(tray_id))
+                self.get_logger().info('Robot is picking up tray {} from table {}'.format(tray_id, tray_table))
                 self.set_robot_gripper_state(True)
+
         else:
             self.get_logger().error(f'Service call failed {future.exception()}')
             self.get_logger().error('Unable to pick tray {} by the robot'.format(tray_id))
 
     def move_tray_to_agv(self, robot, tray_pose, agv):
-        self.get_logger().info('Move tray to AGV service called')
+        """
+        Move a tray to an AGV
+
+        Args:
+            robot (str): Robot name
+            tray_pose (Pose): Pose of the tray in the world frame
+            agv (str): AGV number
+
+        Raises:
+            ValueError: Error raised if robot is invalid
+            KeyboardInterrupt: Exception raised when the user presses Ctrl+C
+        """
+        
+        self.get_logger().info('Move tray to {} service called'.format(agv))
 
         request = MoveTrayToAGV.Request()
 
@@ -387,13 +450,26 @@ class rwa4(Node):
         if future.result() is not None:
             response = future.result()
             if response:
-                self.get_logger().info('Robot is moving tray')
+                self.get_logger().info('Robot is moving tray to {}'.format(agv))
         else:
             self.get_logger().error(f'Service call failed {future.exception()}')
             self.get_logger().error('Unable to move tray by the robot')
 
     def place_tray(self, robot, tray_id, agv):
-        self.get_logger().info('Place tray on AGV service called')
+        """
+        Place tray on AGV
+
+        Args:
+            robot (str): Robot name: floor_robot
+            tray_id (int): ID of the tray to be placed up
+            agv (str): AGV number
+
+        Raises:
+            ValueError: Error raised if robot is invalid
+            KeyboardInterrupt: Exception raised when the user presses Ctrl+C
+        """
+
+        self.get_logger().info('Place tray {} on {} service called'.format(tray_id, agv))
 
         request = PlaceTrayOnAGV.Request()
 
@@ -415,14 +491,26 @@ class rwa4(Node):
         if future.result() is not None:
             response = future.result()
             if response:
-                self.get_logger().info('Robot is placing the tray')
+                self.get_logger().info('Robot is placing the tray {} on {}'.format(tray_id, agv))
                 self.set_robot_gripper_state(False)
         else:
             self.get_logger().error(f'Service call failed {future.exception()}')
             self.get_logger().error('Unable to place the tray by the robot')
 
     def retract_from_agv(self, robot, agv):
-        self.get_logger().info('Retract from AGV service called')
+        """
+        Retract robot from AGV
+
+        Args:
+            robot (str): Robot name: floor_robot
+            agv (str): AGV number
+
+        Raises:
+            ValueError: Error raised if robot is invalid
+            KeyboardInterrupt: Exception raised when the user presses Ctrl+C
+        """
+
+        self.get_logger().info('Retract from {} service called'.format(agv))
 
         request = RetractFromAGV.Request()
 
@@ -443,13 +531,28 @@ class rwa4(Node):
         if future.result() is not None:
             response = future.result()
             if response:
-                self.get_logger().info('Retracting from AGV')
+                self.get_logger().info('Retracting from {}'.format(agv))
         else:
             self.get_logger().error(f'Service call failed {future.exception()}')
             self.get_logger().error('Unable to retract from AGV')
           
     def pickup_part(self, robot, part_pose, part_type, part_color, bin_side):
-        self.get_logger().info('pick up part service called')
+        """ 
+        Pick up part
+
+        Args:
+            robot (str): Robot name
+            part_pose (Pose): Pose of the part in the world frame
+            part_type (int): The type of the part
+            part_color (int): The color of the part
+            bin_side (str): Left/Right corresponds to which camera sees the part
+
+        Raises:
+            ValueError: Error raised if robot is invalid
+            KeyboardInterrupt: Exception raised when the user presses Ctrl+C
+        """
+
+        self.get_logger().info('Pick up part service called')
 
         request = PickupPart.Request()
 
@@ -473,14 +576,28 @@ class rwa4(Node):
         if future.result() is not None:
             response = future.result()
             if response:
-                self.get_logger().info('Robot is picking part')
+                self.get_logger().info('Robot is picking part from {}'.format(bin_side))
                 self.set_robot_gripper_state(True)
         else:
             self.get_logger().error(f'Service call failed {future.exception()}')
             self.get_logger().error('Unable to pick part')     
 
     def move_part_to_agv(self, robot, part_pose, agv, quadrant):
-        self.get_logger().info('move part to agv service called')
+        """
+        Move part to AGV
+
+        Args:
+            robot (str): Robot name
+            part_pose (Pose): Pose of the part in the world frame
+            agv (str): AGV number
+            quadrant (int): The location of the part within the tray
+
+        Raises:
+            ValueError: Error raised if robot is invalid
+            KeyboardInterrupt: Exception raised when the user presses Ctrl+C
+        """
+
+        self.get_logger().info('Move part to {} service called'.format(agv))
 
         request = MovePartToAGV.Request()
 
@@ -503,13 +620,26 @@ class rwa4(Node):
         if future.result() is not None:
             response = future.result()
             if response:
-                self.get_logger().info('Robot is moving part to agv')
+                self.get_logger().info('Robot is moving part to {}'.format(agv))
         else:
             self.get_logger().error(f'Service call failed {future.exception()}')
-            self.get_logger().error('Unable to move part to agv')          
+            self.get_logger().error('Unable to move part to {}'.format(agv))          
 
     def place_part_in_tray(self, robot, agv, quadrant):
-        self.get_logger().info('place part in tray service called')
+        """
+        Place part in tray
+
+        Args:
+            robot (str): Robot name
+            agv (str): AGV number
+            quadrant (int): The location of the part within the tray
+
+        Raises:
+            ValueError: Error raised if robot is invalid
+            KeyboardInterrupt: Exception raised when the user presses Ctrl+C
+        """
+
+        self.get_logger().info('Place part in tray service called')
 
         request = PlacePartInTray.Request()
 
@@ -531,13 +661,19 @@ class rwa4(Node):
         if future.result() is not None:
             response = future.result()
             if response:
-                self.get_logger().info('Robot is placing part in tray')
+                self.get_logger().info('Robot is placing part on quadrant {} of tray on {}'.format(quadrant, agv))
                 self.set_robot_gripper_state(False)
         else:
             self.get_logger().error(f'Service call failed {future.exception()}')
             self.get_logger().error('Unable to place part in tray')  
 
     def lock_agv(self):
+        """
+        Lock AGV
+
+        Raises:
+            KeyboardInterrupt: Exception raised when the user presses Ctrl+C
+        """
 
         self.get_logger().info('Lock AGV service called')
 
@@ -559,6 +695,15 @@ class rwa4(Node):
             self.get_logger().error('Unable to lock AGV')
         
     def move_agv_to_warehouse(self, location):
+        """
+        Move AGV to warehouse
+
+        Args:
+            location (int): The location to send the AGV when the kit is complete.
+
+        Raises:
+            KeyboardInterrupt: Exception raised when the user presses Ctrl+C
+        """
 
         self.get_logger().info('Move AGV to warehouse service called')
 
@@ -580,7 +725,20 @@ class rwa4(Node):
         else:
             self.get_logger().error(f'Service call failed {future.exception()}')
             self.get_logger().error('Unable to move AGV to warehouse')
-  
+
+    ##########################################################
+    ######################### Callbacks ######################
+    ##########################################################
+
+    def ready_callback(self):
+        """
+        Timer callback for publishing on topic order_node/status
+        """
+
+        msg = String()
+        msg.data = 'READY' 
+        self.publisher_.publish(msg)
+
     def orders_callback(self, msg):
         """
         Create AriacOrder object and enable message flags to read messgaes from other topics
@@ -595,10 +753,9 @@ class rwa4(Node):
                       kitting_task = msg.kitting_task
                       ))
         
-        self.get_logger().info('Order Incoming!{}'.format(msg.id))
-
         if len(self.order) == 4:
             self.order_id_to_pick = self._get_order_id
+
             # enable the flags to log only the first message
             self.table1_msg = True
             self.table2_msg = True
@@ -668,53 +825,19 @@ class rwa4(Node):
             if self.part2_poses and self.part2_poses.poses and self.part2_poses.parts and self.part2_poses.sensor_pose:
                 self.right_bin_msg = False
 
-    # def _competition_state_cb(self, msg: CompetitionState):
-    #     '''
-    #     /ariac/competition_state topic callback function
-
-    #     Args:
-    #         msg (CompetitionState): CompetitionState message
-    #     '''
-    #     self._competition_state = msg.competition_state
-    #     self.get_logger().info("_competition_state: {}".format(self._competition_state))
-
-    # def start_competition(self):
-    #     '''
-    #     Start the competition
-    #     '''
-    #     self.get_logger().info('Waiting for competition state READY')
-
-    #     request = Trigger.Request()
-    #     future = self._start_competition_client.call_async(request)
-    #     self.get_logger().info('request, future')
-
-    #     # Wait until the service call is completed
-    #     rclpy.spin_until_future_complete(self, future)
-    #     self.get_logger().info('spin_until_future_complete')
-    #     # future.add_done_callback(self.orders_callback)
-        
-    #     if future.result().success:
-    #         self.get_logger().info('Started competition.')
-    #         self._competition_started = True
-    #     else:
-    #         self.get_logger().warn('Unable to start competition')
-
     def parse_order(self):
         """
         Print all the required information by parsing the objects created.
-        Check if all the message flags are disabled and parse flag is enabled
+        Check if all the message flags are disabled and parse flag is enabled.
+        Execute robot motion using service clients and the picked order information
         """
-        # if self._competition_state == CompetitionState.READY and not self._competition_started:
-        #     self.start_competition()
 
-        # # exit the callback if the kit is completed
-        # if self._kit_completed:
-        #     self.get_logger().info('kit completed')
-        #     return
+        if self._kit_completed:
+            return
         
         if ((not self.table1_msg) and (not self.table2_msg) and (not self.left_bin_msg) and (not self.right_bin_msg)) and self.parse_flag:
+            
             ############ Order ##########
-
             order_picked = [order for order in self.order 
                             if order.id == self.order_id_to_pick][0]
 
@@ -787,6 +910,7 @@ class rwa4(Node):
             self.get_logger().info('Order %s' % output)
             self.parse_flag = False
 
+            # Create AGV specific service client clients
             self._lock_agv_client = self.create_client(
                         Trigger, '/ariac/{}_lock_tray'.format(final_order_action.agv_number),
                         callback_group=self.service_group)
@@ -795,12 +919,19 @@ class rwa4(Node):
                 MoveAGV, '/ariac/move_{}'.format(final_order_action.agv_number),
                 callback_group=self.service_group)
 
+            # Start Robot kitting after all the order information is received
             self.robot_kitting(final_order_action=final_order_action)
             
             self._kit_completed = True
 
             
     def robot_kitting(self, final_order_action):
+        """
+        Call the services to perform kitting
+
+        Args:
+            final_order_action (OrderActionParams): Object consisting all the order infromation
+        """
 
         # move robot home
         self.move_robot_home("floor_robot")
