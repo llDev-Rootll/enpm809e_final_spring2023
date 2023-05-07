@@ -1,7 +1,13 @@
-To run the node to listen to the orders and the object information:
+To build package:
+	cd <ws_name>
+	colcon build --packages-select rwa4_group13
 
-ros2 run rwa4_group13 listener
+To run package:
+	Terminal 1:
+	ros2 launch ariac_gazebo ariac.launch.py trial_name:=final
 
-To run the simulation:
+	Terminal 2:
+	ros2 launch robot_commander robot_commander.launch.py
 
-ros2 launch ariac_gazebo ariac.launch.py trial_name:=kitting
+	Terminal 3:
+	ros2 launch rwa4_group13 listener.launch.py
