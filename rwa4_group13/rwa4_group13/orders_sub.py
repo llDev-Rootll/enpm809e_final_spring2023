@@ -825,7 +825,7 @@ class rwa4(Node):
         for cur_part in final_order_action.parts:
 
             # pick and place purple pump
-            self.pickup_part("floor_robot", cur_part[4], cur_part[0], cur_part[1], "right_bins")
+            self.pickup_part("floor_robot", cur_part[4], cur_part[0], cur_part[1], cur_part[3])
             self.move_part_to_agv("floor_robot", cur_part[4], final_order_action.agv_number, cur_part[2])
             self.place_part_in_tray("floor_robot", final_order_action.agv_number, cur_part[2])
             self.retract_from_agv("floor_robot", final_order_action.agv_number)
