@@ -127,114 +127,6 @@ class AriacOrder():
         
         return output
 
-class Position():
-    """
-    Class to instantiate Position attributes
-
-    Methods
-    -------
-    __str__()
-        Print the attributes of the Position class
-    """
-
-    def __init__(self, x, y, z) -> None:
-        """
-        Constructs all the necessary attributes for the Position object
-
-        Args:
-            x (float): Point Position in x axis
-            y (float): Point Position in y axis
-            z (float): Point Position in z axis
-        """
-
-        self.x = x
-        self.y = y
-        self.z = z
-    
-    def __str__(self) -> str:
-        """
-        Returns a string with the attributes of the Position class
-
-        Returns:
-            str: String with all the attributes information
-        """
-        
-        return "position: \n\t x : {},\n\t y : {},\n\t z : {}\n\t".format(self.x, self.y, self.z)
-
-class Orientation():
-    """
-    Class to instantiate Orientation attributes
-
-    Methods
-    -------
-    __str__()
-        Print the attributes of the Orientation class
-    """
-
-    def __init__(self, x, y, z, w) -> None:
-        """
-        Constructs all the necessary attributes for the Orientation object
-
-        Args:
-            x (float): Quaternion orientation in x axis
-            y (float): Quaternion orientation in y axis
-            z (float): Quaternion orientation in z axis
-            w (float): Quaternion orientation in w axis
-        """
-
-        self.x = x
-        self.y = y
-        self.z = z
-        self.w = w
-    
-    def __str__(self) -> str:
-        """
-        Returns a string with the attributes of the Orientation class
-
-        Returns:
-            str: String with all the attributes information
-        """
-        
-        return "orientation: \n\t x : {},\n\t y : {},\n\t z : {},\n\t w : {}\n\t".format(self.x, self.y, self.z, self.w)
-
-class ObjectPose():
-    """
-    Class to instantiate ObjectPose attributes
-
-    Methods
-    -------
-    __str__()
-        Print the attributes of the ObjectPose class
-    """
-    
-    def __init__(self, object_position, object_orientation) -> None:
-        """
-        Constructs all the necessary attributes for the ObjectPose object
-
-        Args:
-            object_position (Point): position of a point in free space
-            object_orientation (Quaternion): orientation in free space in quaternion form
-        """
-
-        self.position = Position(x = object_position.x,
-                                 y = object_position.y,
-                                 z = object_position.z)
-        
-        self.orientation = Orientation(x = object_orientation.x,
-                                       y = object_orientation.y,
-                                       z = object_orientation.z,
-                                       w = object_orientation.w)
-    
-    def __str__(self) -> str:
-        """
-        Returns a string with the attributes of the ObjectPose class
-
-        Returns:
-            str: String with all the attributes information
-        """
-
-        return "{}\n{}".format(self.position.__str__(), self.orientation.__str__())
-
 class WorldFrame():
     """
     Class to convert object position in camera frame to world frame
@@ -306,24 +198,10 @@ class TrayPoses(WorldFrame):
 
             self.ids.append(tray_pose.id)
             tray_world_pose = self._multiply_pose(sensor_pose, tray_pose.pose)
-            self.poses.append(ObjectPose(object_position = tray_world_pose.position,
-                                        object_orientation = tray_world_pose.orientation))
+            self.poses.append(tray_world_pose)
             self.tray_tables.append(tray_table)
         
-        self.sensor_pose = ObjectPose(object_position = sensor_pose.position,
-                                      object_orientation= sensor_pose.orientation)
-
-    def __str__(self) -> str:
-        """
-        Returns a string with the attributes of the TrayPoses class
-
-        Returns:
-            str: String with all the attributes information
-        """
-
-        output = "tray_poses: \n"+"".join("tray_id : {}\n{}".format(str(tray_id), pose.__str__()) for tray_id, pose in zip(self.ids, self.poses)) 
-
-        return output + "\n\t sensor pose: \n{}".format(self.sensor_pose.__str__())
+        self.sensor_pose = sensor_pose
 
 class PartPoses(WorldFrame):
     """
@@ -351,31 +229,19 @@ class PartPoses(WorldFrame):
             self.parts.append(Part(part_color = part_pose.part.color,
                                    part_type = part_pose.part.type,
                                    part_bin = part_bin))
-            self.poses.append(ObjectPose(object_position = part_world_pose.position,
-                                        object_orientation = part_world_pose.orientation))
+            self.poses.append(part_world_pose)
         
-        self.sensor_pose = ObjectPose(object_position = sensor_pose.position,
-                                      object_orientation= sensor_pose.orientation)
-
-    def __str__(self) -> str:
-        """
-        Returns a string with the attributes of the PartPoses class
-
-        Returns:
-            str: String with all the attributes information
-        """
-    
-        output = "part_poses: \n"+"".join("{}/n{}".format(part.__str__(), pose.__str__()) for part, pose in zip(self.parts, self.poses)) + "\n\t".format(self.sensor_pose.__str__())
-        return output
-
+        self.sensor_pose = sensor_pose
 
 class OrderActionParams():
     
-    def __init__(self, tray_id, tray_table, agv_number) -> None:
+    def __init__(self, tray_id, tray_table, tray_pose, agv_number, destination) -> None:
 
         self.tray_id = tray_id
         self.tray_table = tray_table
+        self.tray_pose = tray_pose
         self.agv_number = agv_number
+        self.destination = destination
 
         self.parts = []
 

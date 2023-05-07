@@ -2,14 +2,19 @@ import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
-from std_srvs.srv import Trigger
-from ariac_msgs.msg import CompetitionState
+
 from competitor_interfaces.msg import Robots as RobotsMsg
-from competitor_interfaces.srv import (
-    EnterToolChanger
-)
-from ariac_msgs.msg import Order
+from ariac_msgs.msg import (Order, CompetitionState)
 from ariac_msgs.msg import AdvancedLogicalCameraImage
+
+from std_srvs.srv import Trigger
+from ariac_msgs.srv import (MoveAGV, ChangeGripper, VacuumGripperControl)
+from competitor_interfaces.srv import (
+    EnterToolChanger, ExitToolChanger, PickupTray, 
+    MoveTrayToAGV, PlaceTrayOnAGV, RetractFromAGV,
+    PickupPart, MovePartToAGV, PlacePartInTray
+)
+
 from .datastructures import AriacOrder, PartPoses, TrayPoses, OrderActionParams
 
 
@@ -69,7 +74,7 @@ class rwa4(Node):
         )
         self.set_parameters([sim_time])
         timer_group = MutuallyExclusiveCallbackGroup()
-        service_group = MutuallyExclusiveCallbackGroup()
+        self.service_group = MutuallyExclusiveCallbackGroup()
 
         self._kit_completed = False
         self._competition_started = False
@@ -86,28 +91,60 @@ class rwa4(Node):
         # Service client for moving the floor robot to the home position
         self._move_floor_robot_home_client = self.create_client(
             Trigger, '/competitor/floor_robot/go_home',
-            callback_group=service_group)
+            callback_group=self.service_group)
         
         # Service client for entering the gripper slot
         self._goto_tool_changer_client = self.create_client(
             EnterToolChanger, '/competitor/floor_robot/enter_tool_changer',
-            callback_group=service_group)
+            callback_group=self.service_group)
         
-        # self._retract_from_tool_changer_client
-        # self._retract_from_agv_client
-
-        # self._pickup_tray_client
-        # self._move_tray_to_agv_client
-        # self._place_tray_client
+        self._retract_from_tool_changer_client = self.create_client(
+            ExitToolChanger, '/competitor/floor_robot/exit_tool_changer',
+            callback_group=self.service_group)
         
+        self._retract_from_agv_client = self.create_client(
+            RetractFromAGV, '/competitor/floor_robot/retract_from_agv',
+            callback_group=self.service_group)
 
-        # self._pickup_part_client
-        # self._move_part_to_agv_client
-        # self._plave_part_in_agv_client
-
-        # self._lock_agv_client
-        # self._move_agv_to_warehouse_client
-
+        self._pickup_tray_client = self.create_client(
+            PickupTray, '/competitor/floor_robot/pickup_tray',
+            callback_group=self.service_group)
+        
+        self._move_tray_to_agv_client = self.create_client(
+            MoveTrayToAGV, '/competitor/floor_robot/move_tray_to_agv',
+            callback_group=self.service_group)
+        
+        self._place_tray_client = self.create_client(
+            PlaceTrayOnAGV, '/competitor/floor_robot/place_tray_on_agv',
+            callback_group=self.service_group)
+        
+        self._pickup_part_client = self.create_client(
+            PickupPart, '/competitor/floor_robot/pickup_part',
+            callback_group=self.service_group)
+        
+        self._move_part_to_agv_client = self.create_client(
+            MovePartToAGV, '/competitor/floor_robot/move_part_to_agv',
+            callback_group=self.service_group)
+        
+        self._place_part_in_agv_client = self.create_client(
+            PlacePartInTray, '/competitor/floor_robot/place_part_in_tray',
+            callback_group=self.service_group)
+        
+        # self._lock_agv_client = self.create_client(
+        #     Trigger, '/ariac/agv_lock_tray',
+        #     callback_group=self.service_group)
+        
+        # self._move_agv_to_warehouse_client = self.create_client(
+        #     MoveAGV, '/ariac/move_agvX',
+        #     callback_group=self.service_group)
+        
+        self._change_robot_gripper_client = self.create_client(
+            ChangeGripper, '/ariac/floor_robot_change_gripper',
+            callback_group=self.service_group)
+        
+        self._enable_robot_gripper_client = self.create_client(
+            VacuumGripperControl, '/ariac/floor_robot_enable_gripper',
+            callback_group=self.service_group)
 
         ##############################################################
         self.declare_parameter('order_id', rclpy.Parameter.Type.STRING)
@@ -138,6 +175,7 @@ class rwa4(Node):
             AdvancedLogicalCameraImage, '/ariac/sensors/right_bins_camera/image',
             self.right_bin_callback, qos_policy)
 
+        # self.timed_function = self.create_timer(1, self.parse_order,callback_group=timer_group)
         self.timed_function = self.create_timer(0.1, self.parse_order)
 
         # Initiate the poses as None
@@ -150,6 +188,33 @@ class rwa4(Node):
 
         self.order_id_to_pick = None
     
+    def _competition_state_cb(self, msg: CompetitionState):
+        '''
+        /ariac/competition_state topic callback function
+
+        Args:
+            msg (CompetitionState): CompetitionState message
+        '''
+        self._competition_state = msg.competition_state
+
+    def start_competition(self):
+        '''
+        Start the competition
+        '''
+        self.get_logger().info('Waiting for competition state READY')
+
+        request = Trigger.Request()
+        future = self._start_competition_client.call_async(request)
+
+        # Wait until the service call is completed
+        rclpy.spin_until_future_complete(self, future)
+
+        if future.result().success:
+            self.get_logger().info('Started competition.')
+            self._competition_started = True
+        else:
+            self.get_logger().warn('Unable to start competition')
+     
     def move_robot_home(self, robot_name):
         '''Move one of the robots to its home position.
 
@@ -175,6 +240,7 @@ class rwa4(Node):
             self.get_logger().info(f'Moved {robot_name} to home position')
         else:
             self.get_logger().warn(future.result().message)
+   
     def goto_tool_changer(self, robot, station, gripper_type):
         '''
         Move the end effector inside the gripper slot.
@@ -214,33 +280,279 @@ class rwa4(Node):
             self.get_logger().error(f'Service call failed {future.exception()}')
             self.get_logger().error('Unable to move the robot to the tool changer')
 
-    def _competition_state_cb(self, msg: CompetitionState):
-        '''
-        /ariac/competition_state topic callback function
+    def retract_from_tool_changer(self, robot, station, gripper_type):
 
-        Args:
-            msg (CompetitionState): CompetitionState message
-        '''
-        self._competition_state = msg.competition_state
+        self.get_logger().info('Retract robot gripper service called')
 
-    def start_competition(self):
-        '''
-        Start the competition
-        '''
-        self.get_logger().info('Waiting for competition state READY')
+        request = ExitToolChanger.Request()
+
+        if robot == "floor_robot":
+            request.robot = RobotsMsg.FLOOR_ROBOT
+        else:
+            raise ValueError('Invalid robot name')
+
+        request.station = station
+        request.gripper_type = gripper_type
+
+        future = self._retract_from_tool_changer_client.call_async(request)
+
+        try:
+            rclpy.spin_until_future_complete(self, future)
+        except KeyboardInterrupt as kb_error:
+            raise KeyboardInterrupt from kb_error
+
+        if future.result() is not None:
+            response = future.result()
+            if response:
+                self.get_logger().info('Robot is retracting from the tool changer')
+        else:
+            self.get_logger().error(f'Service call failed {future.exception()}')
+            self.get_logger().error('Unable to retract the robot from the tool changer')
+
+    def pickup_tray(self, robot, tray_id, tray_pose, tray_table):
+
+        self.get_logger().info('Pick up tray service called')
+
+        request = PickupTray.Request()
+
+        if robot == "floor_robot":
+            request.robot = RobotsMsg.FLOOR_ROBOT
+        else:
+            raise ValueError('Invalid robot name')
+
+        request.tray_id = tray_id
+        request.tray_pose = tray_pose
+        request.tray_station = tray_table
+
+        future = self._pickup_tray_client.call_async(request)
+
+        try:
+            rclpy.spin_until_future_complete(self, future)
+        except KeyboardInterrupt as kb_error:
+            raise KeyboardInterrupt from kb_error
+
+        if future.result() is not None:
+            response = future.result()
+            if response:
+                self.get_logger().info('Robot is picking up tray {}'.format(tray_id) )
+        else:
+            self.get_logger().error(f'Service call failed {future.exception()}')
+            self.get_logger().error('Unable to pick tray {} by the robot'.format(tray_id))
+
+    def move_tray_to_agv(self, robot, tray_pose, agv):
+        self.get_logger().info('Move tray to AGV service called')
+
+        request = MoveTrayToAGV.Request()
+
+        if robot == "floor_robot":
+            request.robot = RobotsMsg.FLOOR_ROBOT
+        else:
+            raise ValueError('Invalid robot name')
+
+        request.tray_pose = tray_pose
+        request.agv = agv
+
+        future = self._move_tray_to_agv_client.call_async(request)
+
+        try:
+            rclpy.spin_until_future_complete(self, future)
+        except KeyboardInterrupt as kb_error:
+            raise KeyboardInterrupt from kb_error
+
+        if future.result() is not None:
+            response = future.result()
+            if response:
+                self.get_logger().info('Robot is moving tray')
+        else:
+            self.get_logger().error(f'Service call failed {future.exception()}')
+            self.get_logger().error('Unable to move tray by the robot')
+
+    def place_tray(self, robot, tray_id, agv):
+        self.get_logger().info('Place tray on AGV service called')
+
+        request = PlaceTrayOnAGV.Request()
+
+        if robot == "floor_robot":
+            request.robot = RobotsMsg.FLOOR_ROBOT
+        else:
+            raise ValueError('Invalid robot name')
+
+        request.tray_id = tray_id
+        request.agv = agv
+
+        future = self._place_tray_client.call_async(request)
+
+        try:
+            rclpy.spin_until_future_complete(self, future)
+        except KeyboardInterrupt as kb_error:
+            raise KeyboardInterrupt from kb_error
+
+        if future.result() is not None:
+            response = future.result()
+            if response:
+                self.get_logger().info('Robot is placing the tray')
+        else:
+            self.get_logger().error(f'Service call failed {future.exception()}')
+            self.get_logger().error('Unable to place the tray by the robot')
+
+    def retract_from_agv(self, robot, agv):
+        self.get_logger().info('Retract from AGV service called')
+
+        request = RetractFromAGV.Request()
+
+        if robot == "floor_robot":
+            request.robot = RobotsMsg.FLOOR_ROBOT
+        else:
+            raise ValueError('Invalid robot name')
+
+        request.agv = agv
+
+        future = self._retract_from_agv_client.call_async(request)
+
+        try:
+            rclpy.spin_until_future_complete(self, future)
+        except KeyboardInterrupt as kb_error:
+            raise KeyboardInterrupt from kb_error
+
+        if future.result() is not None:
+            response = future.result()
+            if response:
+                self.get_logger().info('Retracting from AGV')
+        else:
+            self.get_logger().error(f'Service call failed {future.exception()}')
+            self.get_logger().error('Unable to retract from AGV')
+          
+    def pickup_part(self, robot, part_pose, part_type, part_color, bin_side):
+        self.get_logger().info('pick up part service called')
+
+        request = PickupPart.Request()
+
+        if robot == "floor_robot":
+            request.robot = RobotsMsg.FLOOR_ROBOT
+        else:
+            raise ValueError('Invalid robot name')
+
+        request.part_type = part_type
+        request.part_pose = part_pose
+        request.part_color = part_color
+        request.bin_side = bin_side
+
+        future = self._pickup_part_client.call_async(request)
+
+        try:
+            rclpy.spin_until_future_complete(self, future)
+        except KeyboardInterrupt as kb_error:
+            raise KeyboardInterrupt from kb_error
+
+        if future.result() is not None:
+            response = future.result()
+            if response:
+                self.get_logger().info('Robot is picking part')
+        else:
+            self.get_logger().error(f'Service call failed {future.exception()}')
+            self.get_logger().error('Unable to pick part')     
+
+    def move_part_to_agv(self, robot, part_pose, agv, quadrant):
+        self.get_logger().info('move part to agv service called')
+
+        request = MovePartToAGV.Request()
+
+        if robot == "floor_robot":
+            request.robot = RobotsMsg.FLOOR_ROBOT
+        else:
+            raise ValueError('Invalid robot name')
+
+        request.part_pose = part_pose
+        request.agv = agv
+        request.quadrant = quadrant
+
+        future = self._move_part_to_agv_client.call_async(request)
+
+        try:
+            rclpy.spin_until_future_complete(self, future)
+        except KeyboardInterrupt as kb_error:
+            raise KeyboardInterrupt from kb_error
+
+        if future.result() is not None:
+            response = future.result()
+            if response:
+                self.get_logger().info('Robot is moving part to agv')
+        else:
+            self.get_logger().error(f'Service call failed {future.exception()}')
+            self.get_logger().error('Unable to move part to agv')          
+
+    def place_part_in_tray(self, robot, agv, quadrant):
+        self.get_logger().info('place part in tray service called')
+
+        request = PlacePartInTray.Request()
+
+        if robot == "floor_robot":
+            request.robot = RobotsMsg.FLOOR_ROBOT
+        else:
+            raise ValueError('Invalid robot name')
+
+        request.agv = agv
+        request.quadrant = quadrant
+
+        future = self._place_part_in_agv_client.call_async(request)
+
+        try:
+            rclpy.spin_until_future_complete(self, future)
+        except KeyboardInterrupt as kb_error:
+            raise KeyboardInterrupt from kb_error
+
+        if future.result() is not None:
+            response = future.result()
+            if response:
+                self.get_logger().info('Robot is placing part in tray')
+        else:
+            self.get_logger().error(f'Service call failed {future.exception()}')
+            self.get_logger().error('Unable to place part in tray')  
+
+    def lock_agv(self):
+
+        self.get_logger().info('Lock AGV service called')
 
         request = Trigger.Request()
-        future = self._start_competition_client.call_async(request)
 
-        # Wait until the service call is completed
-        rclpy.spin_until_future_complete(self, future)
+        future = self._lock_agv_client.call_async(request)
 
-        if future.result().success:
-            self.get_logger().info('Started competition.')
-            self._competition_started = True
+        try:
+            rclpy.spin_until_future_complete(self, future)
+        except KeyboardInterrupt as kb_error:
+            raise KeyboardInterrupt from kb_error
+
+        if future.result() is not None:
+            response = future.result()
+            if response:
+                self.get_logger().info('Locking AGV')
         else:
-            self.get_logger().warn('Unable to start competition')
-    
+            self.get_logger().error(f'Service call failed {future.exception()}')
+            self.get_logger().error('Unable to lock AGV')
+        
+    def move_agv_to_warehouse(self, location):
+
+        self.get_logger().info('Move AGV to warehouse service called')
+
+        request = MoveAGV.Request()
+
+        request.location = location
+
+        future = self._move_agv_to_warehouse_client.call_async(request)
+
+        try:
+            rclpy.spin_until_future_complete(self, future)
+        except KeyboardInterrupt as kb_error:
+            raise KeyboardInterrupt from kb_error
+
+        if future.result() is not None:
+            response = future.result()
+            if response:
+                self.get_logger().info('Moving AGV to warehouse')
+        else:
+            self.get_logger().error(f'Service call failed {future.exception()}')
+            self.get_logger().error('Unable to move AGV to warehouse')
+  
     def orders_callback(self, msg):
         """
         Create AriacOrder object and enable message flags to read messgaes from other topics
@@ -334,11 +646,9 @@ class rwa4(Node):
         """
         # if self._competition_state == CompetitionState.READY and not self._competition_started:
         #     self.start_competition()
-        # self.get_logger().info('kit complete:  %s' % self._kit_completed)
+
         if self._kit_completed:
             return 
-        
-        # self.get_logger().info(str(self.table1_msg)+" " +str(self.table2_msg)+" " +str(self.left_bin_msg)+" " + str(self.right_bin_msg))
         
         if ((not self.table1_msg) and (not self.table2_msg) and (not self.left_bin_msg) and (not self.right_bin_msg)) and self.parse_flag:
             ############ Order ##########
@@ -369,7 +679,9 @@ class rwa4(Node):
             assert cur_tray_pose is not None, "No trays matched tray ID in Order"
             final_order_action = OrderActionParams(tray_id=tray_id,
                                                    tray_table=cur_tray_table,
+                                                   tray_pose=cur_tray_pose,
                                                    agv_number="agv{}".format(str(order_picked.kitting_task.agv_number)),
+                                                   destination=order_picked.kitting_task.destination
                                                    )
             output_tray = "\n  - id: {} \n  - pose:\n    - position: [{}, {}, {}] \n    - orientation: [{}, {}, {}, {}]".format(tray_id, 
                                                                                                                   cur_tray_pose.position.x, 
@@ -413,8 +725,16 @@ class rwa4(Node):
             self.get_logger().info('Order %s' % output)
             self.parse_flag = False
 
-            self.robot_kitting(final_order_action=final_order_action)
+            self._lock_agv_client = self.create_client(
+                        Trigger, '/ariac/{}_lock_tray'.format(final_order_action.agv_number),
+                        callback_group=self.service_group)
 
+            self._move_agv_to_warehouse_client = self.create_client(
+                MoveAGV, '/ariac/move_{}'.format(final_order_action.agv_number),
+                callback_group=self.service_group)
+
+            self.robot_kitting(final_order_action=final_order_action)
+            
             self._kit_completed = True
 
             
@@ -422,7 +742,35 @@ class rwa4(Node):
 
         # move robot home
         self.move_robot_home("floor_robot")
+        
+        # change gripper type
         self.goto_tool_changer("floor_robot", final_order_action.tray_table, "trays")
+        self.retract_from_tool_changer("floor_robot", final_order_action.tray_table, "trays")
+
+        # pick and place tray
+        self.pickup_tray("floor_robot", final_order_action.tray_id, final_order_action.tray_pose, final_order_action.tray_table)
+        self.move_tray_to_agv("floor_robot", final_order_action.tray_pose, final_order_action.agv_number)
+        self.place_tray("floor_robot", final_order_action.tray_id, final_order_action.agv_number)
+        self.retract_from_agv("floor_robot", final_order_action.agv_number)
+
+        # for loop to go through all the parts
+        for cur_part in final_order_action.parts:
+            # change gripper to pick up parts
+            self.goto_tool_changer("floor_robot", final_order_action.tray_table, "parts")
+            self.retract_from_tool_changer("floor_robot", final_order_action.tray_table, "parts")
+
+            # pick and place purple pump
+            self.pickup_part("floor_robot", cur_part[4], cur_part[0], cur_part[1], "right_bins")
+            self.move_part_to_agv("floor_robot", cur_part[4], final_order_action.agv_number, cur_part[2])
+            self.place_part_in_tray("floor_robot", final_order_action.agv_number, cur_part[2])
+            self.retract_from_agv("floor_robot", final_order_action.agv_number)
+
+            # move robot home
+            self.move_robot_home("floor_robot")
+
+        # move agv to warehouse
+        self.lock_agv()
+        self.move_agv_to_warehouse(3)
 
 def main(args=None):
     rclpy.init(args=args)
