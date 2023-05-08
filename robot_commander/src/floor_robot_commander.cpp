@@ -712,7 +712,7 @@ void FloorRobotCommander::FloorRobotWaitForAttach(double timeout)
 
         FloorRobotMoveCartesian(waypoints, 0.1, 0.1);
 
-        usleep(600);
+        usleep(800);
 
         if (now() - start > rclcpp::Duration::from_seconds(timeout))
         {
@@ -911,7 +911,7 @@ bool FloorRobotCommander::FloorRobotPickupTray(int tray_id_, geometry_msgs::msg:
     waypoints.push_back(BuildPose(tray_pose_.position.x, tray_pose_.position.y,
                                   tray_pose_.position.z + pick_offset_, SetRobotOrientation(tray_rotation)));
     FloorRobotMoveCartesian(waypoints, 0.3, 0.3);
-    FloorRobotWaitForAttach(3.0);
+    FloorRobotWaitForAttach(6.0);
 
     // Add kit tray to planning scene
     std::string tray_name = "kit_tray_" + std::to_string(tray_id_);
@@ -937,7 +937,7 @@ bool FloorRobotCommander::FloorRobotPickupPart(geometry_msgs::msg::Pose part_pos
                                   part_pose_.position.z + part_heights_[part_type_] + pick_offset_, SetRobotOrientation(part_rotation)));
 
     FloorRobotMoveCartesian(waypoints, 0.3, 0.3);
-    FloorRobotWaitForAttach(3.0);
+    FloorRobotWaitForAttach(6.0);
 
     // Add part to planning scene
     std::string part_name = part_colors_[part_color_] + "_" + part_types_[part_type_];

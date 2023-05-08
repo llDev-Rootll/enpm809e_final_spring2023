@@ -880,12 +880,16 @@ class rwa4(Node):
             all_part_parts = [*self.part1_poses.parts, *self.part2_poses.parts]
             all_part_poses = [*self.part1_poses.poses, *self.part2_poses.poses]
             output_part_string = []
-
+            part_history = []
             for cur_part in order_picked.kitting_task.parts:
                 for part_idx, part_parts in enumerate(all_part_parts):
                     if cur_part.color == part_parts.color and cur_part.type == part_parts.type:
                             cur_part_pose = all_part_poses[part_idx]
-
+                            if cur_part_pose in part_history:
+                                continue
+                            else:
+                                part_history.append(cur_part_pose)
+                            
                             output_part_n = "  - {} {}\n    - pose:\n      - position: [{}, {}, {}] \n      - orientation: [{}, {}, {}, {}]\n".format(self.color_dict[cur_part.color], 
                                                                                                                     self.type_dict[cur_part.type],
                                                                                                                     cur_part_pose.position.x, 
@@ -895,6 +899,7 @@ class rwa4(Node):
                                                                                                                     cur_part_pose.orientation.y, 
                                                                                                                     cur_part_pose.orientation.z,
                                                                                                                     cur_tray_pose.orientation.w)
+                            
                             final_order_action.add_parts(part_type=cur_part.type,
                                                          part_color=cur_part.color,
                                                          part_quadrant=cur_part.quadrant,
