@@ -6,11 +6,6 @@ import PyKDL
 class Part():
     """
     Class to instantiate Part attributes
-
-    Methods
-    -------
-    __str__()
-        Print the attributes of the Part class
     """
 
     def __init__(self, part_color, part_type, **kwargs) -> None:
@@ -23,33 +18,17 @@ class Part():
             quadrant (int): The location of the part within the tray
         """
 
-        self.color = part_color
-        self.type = part_type
+        self._color = part_color
+        self._type = part_type
+        self._part_bin = str
+        self._quadrant = int
         if kwargs:
-            self.quadrant = kwargs["part_quadrant"] if "part_quadrant" in kwargs else None
-            self.part_bin = kwargs["part_bin"] if "part_bin" in kwargs else None
-    
-    def __str__(self) -> str:
-        """
-        Returns a string with the attributes of the Part class
+            self._quadrant = kwargs["part_quadrant"] if "part_quadrant" in kwargs else None
+            self._part_bin = kwargs["part_bin"] if "part_bin" in kwargs else None
 
-        Returns:
-            str: String with all the attributes information
-        """
-
-        if self.quadrant:
-            return "color : {},\n\t type : {},\n\t quadrant : {}\n\t".format(self.color, self.type, self.quadrant)
-        else:
-            return "color : {},\n\t type : {}\n\t".format(self.color, self.type)
-
-class Kitting_Task():
+class KittingTask():
     """
     Class to instantiate Knitting_Task attributes
-
-    Methods
-    -------
-    __str__()
-        Print the attributes of the Knitting_Task class
     """
 
     def __init__(self, agv_number, tray_id, destination, parts) -> None:
@@ -63,35 +42,17 @@ class Kitting_Task():
             parts (list): Information on parts needed to build the kit
         """
 
-        self.agv_number = agv_number
-        self.tray_id = tray_id
-        self.destination = destination
-        self.parts = [Part(part_color = kitting_part.part.color, 
+        self._agv_number = agv_number
+        self._tray_id = tray_id
+        self._destination = destination
+        self._parts = [Part(part_color = kitting_part.part.color, 
                            part_type = kitting_part.part.type, 
                            part_quadrant = kitting_part.quadrant) 
                            for kitting_part in parts]
     
-    def __str__(self) -> str:
-        """
-        Returns a string with the attributes of the Knitting_Task class
-
-        Returns:
-            str: String with all the attributes information
-        """
-
-        part_string = "".join("part_{} : \n\t{}".format(str(idx), part.__str__()) for idx, part in enumerate(self.parts))
-        output = "agv_number : {},\n tray_id : {},\n destination : {},\n parts : \n\t{}".format(self.agv_number, self.tray_id, self.destination, part_string)
-
-        return output
-    
 class AriacOrder():
     """
     Class to instantiate AriacOrder attributes
-
-    Methods
-    -------
-    __str__()
-        Print the attributes of the AriacOrder class
     """
 
     def __init__(self, order_id, order_type, order_priority, kitting_task) -> None:
@@ -106,26 +67,14 @@ class AriacOrder():
             kitting_task (Kitting_Task): Information of the kit attributes
         """
 
-        self.id = order_id 
-        self.type = order_type
-        self.priority = order_priority
-        self.kitting_task = Kitting_Task(agv_number = kitting_task.agv_number,
-                                         tray_id = kitting_task.tray_id,
-                                         destination = kitting_task.destination,
-                                         parts = kitting_task.parts
+        self._id = order_id 
+        self._type = order_type
+        self._priority = order_priority
+        self._kitting_task = KittingTask(agv_number = kitting_task._agv_number,
+                                         tray_id = kitting_task._tray_id,
+                                         destination = kitting_task._destination,
+                                         parts = kitting_task._parts
                                          )
-
-    def __str__(self) -> str:
-        """
-        Returns a string with the attributes of the AriacOrder class
-
-        Returns:
-            str: String with all the attributes information
-        """
-
-        output = "id : {},\n type : {},\n priority : {},\n kitting_task : {}".format(self.id, self.type, self.priority, self.kitting_task.__str__())
-        
-        return output
 
 class WorldFrame():
     """
@@ -192,17 +141,17 @@ class TrayPoses(WorldFrame):
             tray_table (str): kts1/kts2, The table where tray is placed 
         """
         
-        self.ids = []
-        self.poses = []
-        self.tray_tables = []
+        self._ids = []
+        self._poses = []
+        self._tray_tables = []
         for tray_pose in tray_poses:
 
-            self.ids.append(tray_pose.id)
+            self._ids.append(tray_pose.id)
             tray_world_pose = self._multiply_pose(sensor_pose, tray_pose.pose)
-            self.poses.append(tray_world_pose)
-            self.tray_tables.append(tray_table)
+            self._poses.append(tray_world_pose)
+            self._tray_tables.append(tray_table)
         
-        self.sensor_pose = sensor_pose
+        self._sensor_pose = sensor_pose
 
 class PartPoses(WorldFrame):
     """
@@ -222,17 +171,17 @@ class PartPoses(WorldFrame):
             sensor_pose (Pose): Pose of the camera in the world frame.
         """
         
-        self.parts = []
-        self.poses = []
+        self._parts = []
+        self._poses = []
         for part_pose in part_poses:
 
             part_world_pose = self._multiply_pose(sensor_pose, part_pose.pose)
-            self.parts.append(Part(part_color = part_pose.part.color,
+            self._parts.append(Part(part_color = part_pose.part.color,
                                    part_type = part_pose.part.type,
                                    part_bin = part_bin))
-            self.poses.append(part_world_pose)
+            self._poses.append(part_world_pose)
         
-        self.sensor_pose = sensor_pose
+        self._sensor_pose = sensor_pose
 
 class OrderActionParams():
     """
@@ -256,13 +205,13 @@ class OrderActionParams():
             destination (int): The destination to send the AGV when the kit is complete.
         """
 
-        self.tray_id = tray_id
-        self.tray_table = tray_table
-        self.tray_pose = tray_pose
-        self.agv_number = agv_number
-        self.destination = destination
+        self._tray_id = tray_id
+        self._tray_table = tray_table
+        self._tray_pose = tray_pose
+        self._agv_number = agv_number
+        self._destination = destination
 
-        self.parts = []
+        self._parts = []
 
     def add_parts(self, part_type, part_color, part_quadrant, part_bin, part_pose):
         """
@@ -276,7 +225,7 @@ class OrderActionParams():
             part_pose (Pose): Pose of the part in the world frame
         """
 
-        self.parts.append([part_type,
+        self._parts.append([part_type,
                             part_color,
                             part_quadrant,
                             part_bin,

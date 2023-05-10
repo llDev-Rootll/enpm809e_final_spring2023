@@ -14,6 +14,17 @@ class StartCompetition(Node):
 
     Args:
         Node (rclpy.node.Node): Parent class for ROS nodes
+    
+    Methods:
+    _listener_callback(msg):
+        order_node/status topic callback function, check if order_node is ready to be initialized
+    _competition_state_cb(msg: CompetitionState):
+        /ariac/competition_state topic callback function
+    _start_competition():
+        Start the competition using Trigger
+    _competition_timer_callback():
+        Start the competiion if CompetitionState is READY and _competition_started is True. Check
+        is done every 1 second
 
     Raises:
         KeyboardInterrupt: Exception raised when the user uses Ctrl+C to kill a process
@@ -34,7 +45,7 @@ class StartCompetition(Node):
 
         # Flag to indicate if the kit has been completed
         self._competition_started = False
-        self._competition_state = None
+        self._competition_state = int
         self._order_node_state = False
 
         # subscriber
@@ -47,9 +58,9 @@ class StartCompetition(Node):
 
         # Service client for starting the competition
         self._start_competition_client = self.create_client(Trigger, '/ariac/start_competition')        
-        self.subscription = self.create_subscription(String,'order_node/status', self.listener_callback, 10)
+        self._order_ready_sub = self.create_subscription(String,'order_node/status', self._listener_callback, 10)
 
-    def listener_callback(self, msg):
+    def _listener_callback(self, msg):
         """
         order_node/status topic callback function
 
@@ -76,14 +87,14 @@ class StartCompetition(Node):
             self.get_logger().info("Waiting for 3 seconds before starting competition")
             time.sleep(3)
             if self._competition_state == CompetitionState.READY and not self._competition_started:
-                self.start_competition()
+                self._start_competition()
 
             if self._competition_started:
                 self.get_logger().info("Destroying start node")
                 self.destroy_node()
                 return
 
-    def start_competition(self):
+    def _start_competition(self):
         '''
         Start the competition
         '''

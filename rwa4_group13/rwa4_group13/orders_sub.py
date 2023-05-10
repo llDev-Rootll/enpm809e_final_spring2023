@@ -1,11 +1,10 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
-from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 
 from competitor_interfaces.msg import Robots as RobotsMsg
-from ariac_msgs.msg import (Order, CompetitionState)
+from ariac_msgs.msg import Order
 from ariac_msgs.msg import AdvancedLogicalCameraImage
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
@@ -16,10 +15,10 @@ from competitor_interfaces.srv import (
     PickupPart, MovePartToAGV, PlacePartInTray
 )
 
-from .datastructures import AriacOrder, PartPoses, TrayPoses, OrderActionParams
+from .data_structures import AriacOrder, PartPoses, TrayPoses, OrderActionParams
 
 
-class rwa4(Node):
+class ARIACKitting(Node):
     """
     Class to instantiate rwa4 methods and attributes
 
@@ -28,16 +27,18 @@ class rwa4(Node):
 
     Attributes
     ----------
-    color_dict (dict): Mapping the part color id to color name
-    type_dict (dict): Mapping the part type id to type name
-    table1_msg (bool): Flag to read the first message from topic /ariac/sensors/table1_camera/image 
-    table2_msg (bool): Flag to read the first message from topic /ariac/sensors/table2_camera/image 
-    left_bin_msg (bool): Flag to read the first message from topic /ariac/sensors/left_bins_camera/image 
-    right_bin_msg (bool): Flag to read the first message from topic /ariac/sensors/right_bins_camera/image
-    parse_flag (bool): Flag to enable printing information on terminal by parsing the objects
+    _color_dict (dict): Mapping the part color id to color name
+    _type_dict (dict): Mapping the part type id to type name
+    __table1_msg (bool): Flag to read the first message from topic /ariac/sensors/table1_camera/image 
+    __table2_msg (bool): Flag to read the first message from topic /ariac/sensors/table2_camera/image 
+    __left_bin_msg (bool): Flag to read the first message from topic /ariac/sensors/left_bins_camera/image 
+    __right_bin_msg (bool): Flag to read the first message from topic /ariac/sensors/right_bins_camera/image
+    __parse_flag (bool): Flag to enable printing information on terminal by parsing the objects
 
     Methods
     -------
+    __init__():
+        Constructor to initialize all the attributes
     orders_callback(msg): 
         Create AriacOrder object and save the attributes from msg parameter
     table1_callback(msg):
@@ -48,18 +49,46 @@ class rwa4(Node):
         Create PartPoses object and save the attributes from msg parameter
     right_bin_callback(msg):
         Create PartPoses object and save the attributes from msg parameter
-    parse_print():
-        Print all the required information by parsing the objects created
+    parse_order():
+        Print all the required information by parsing the objects created.
+        Check if all the message flags are disabled and parse flag is enabled.
+        Execute robot motion using service clients and the picked order information
+    change_robot_gripper(gripper_type):
+        Change robot gripper to part/tray type
+    goto_tool_changer(robot, station, gripper_type):
+        Move the end effector inside the gripper slot.
+    lock_agv():
+        Lock AGV and prepare to move it
+    move_agv_to_warehouse(location):
+        Move AGV to warehouse
+    move_part_to_agv(robot, part_pose, agv, quadrant):
+        Move part to AGV
+    move_robot_home(robot_name):
+        Move one of the robots to its home position.
+        move_tray_to_agv(robot, tray_pose, agv)
+    Move a tray to an AGV
+    pickup_part(robot, part pose, part_type, part_color, bin_side)
+        Pick up part from a bin
+    pickup_tray(robot, tray_id, tray_pose, tray_table)
+        Pick up a tray from a kitting station
+    place_part_in_tray(robot, agv, quadrant)
+        Place part in tray
+    place_tray(robot, tray_id, agv)
+        Place tray on AGV
+    ready_callback()
+        Timer callback for publishing on topic order_node/status
+    retract_from_agv(robot, agv)
+        Retract robot from AGV
+    retract_from_tool_changer(robot, station, gripper_type)
+        Retract robot gripper from the gripper slot
+    robot_kitting(final_order_action)
+        Call the services to perform kitting
+    set_robot_gripper_state(state)
+        Enable/Disable gripper suction
     """
 
-    color_dict = {0:"Red", 1:"Green", 2 : "Blue", 3: "Orange", 4: "Purple"}
-    type_dict = {10:"Battery", 11: "Pump", 12:"Sensor", 13:"Regulator"}
-    table1_msg = False
-    table2_msg = False
-    left_bin_msg = False
-    right_bin_msg = False
-    parse_flag = False
-    order_picked = False
+    _color_dict = {0:"Red", 1:"Green", 2 : "Blue", 3: "Orange", 4: "Purple"}
+    _type_dict = {10:"Battery", 11: "Pump", 12:"Sensor", 13:"Regulator"}
 
     def __init__(self):
         """
@@ -74,125 +103,129 @@ class rwa4(Node):
             True
         )
         self.set_parameters([sim_time])
-        self.timer_group = MutuallyExclusiveCallbackGroup()
-        self.service_group = MutuallyExclusiveCallbackGroup()
+        self._timer_group = MutuallyExclusiveCallbackGroup()
+        self._service_group = MutuallyExclusiveCallbackGroup()
 
-        self._kit_completed = False
-        self._competition_started = False
-        self._competition_state = None
+        self.__kit_completed = False
+        self._get_order_id = str
 
         ####################### Publisher for synchronizing with the start competition node ###########
-        self.publisher_ = self.create_publisher(String, 'order_node/status', 10)
-        self.node_ready = self.create_timer(0.5, self.ready_callback)
+        self._order_status_pub = self.create_publisher(String, 'order_node/status', 10)
+        self._node_ready = self.create_timer(0.5, self.ready_callback)
         
         ######################### Parse Order ID required #####################################
         self.declare_parameter('order_id', rclpy.Parameter.Type.STRING)
         self._get_order_id = self.get_parameter('order_id').get_parameter_value().string_value
-        
-        self.get_logger().info('Get order: %s' % self._get_order_id)
+        # self.get_logger().info('Get order: %s' % self._get_order_id)
 
         ############################ Initialize Topic Subscribers ##################################
-        qos_policy = rclpy.qos.QoSProfile(reliability=rclpy.qos.ReliabilityPolicy.BEST_EFFORT,
+        self.__qos_policy = rclpy.qos.QoSProfile(reliability=rclpy.qos.ReliabilityPolicy.BEST_EFFORT,
                                           history=rclpy.qos.HistoryPolicy.KEEP_LAST,
                                           depth=1)
         
-        self.orders_sub = self.create_subscription(
+        self._orders_sub = self.create_subscription(
             Order, '/ariac/orders', self.orders_callback, 10)
         
-        self.table1_sub = self.create_subscription(
+        self._table1_sub = self.create_subscription(
             AdvancedLogicalCameraImage, '/ariac/sensors/table1_camera/image',
-            self.table1_callback, qos_policy)
+            self.table1_callback, self.__qos_policy)
         
-        self.table2_sub = self.create_subscription(
+        self._table2_sub = self.create_subscription(
             AdvancedLogicalCameraImage, '/ariac/sensors/table2_camera/image',
-            self.table2_callback, qos_policy)
+            self.table2_callback, self.__qos_policy)
         
-        self.left_bin_sub = self.create_subscription(
+        self._left_bin_sub = self.create_subscription(
             AdvancedLogicalCameraImage, '/ariac/sensors/left_bins_camera/image',
-            self.left_bin_callback, qos_policy)
+            self.left_bin_callback, self.__qos_policy)
         
-        self.right_bin_sub = self.create_subscription(
+        self._right_bin_sub = self.create_subscription(
             AdvancedLogicalCameraImage, '/ariac/sensors/right_bins_camera/image',
-            self.right_bin_callback, qos_policy)
+            self.right_bin_callback, self.__qos_policy)
         
         ############################ Initiate the poses ##################################
-        self.tray1_poses = None
-        self.tray2_poses = None
-        self.part1_poses = None
-        self.part2_poses = None
-        self.order = []
-        self.order_id_to_pick = None
+        self.__tray1_poses = TrayPoses
+        self.__tray2_poses = TrayPoses
+        self.__part1_poses = PartPoses
+        self.__part2_poses = PartPoses
+        self.__order = []
+        self.__order_id_to_pick = str
 
-        ################### Initialize Timer Callback for the Order ######################
-        self.timed_function = self.create_timer(0.5, self.parse_order, callback_group=self.timer_group)
+        self.__table1_msg = True
+        self.__table2_msg = True
+        self.__left_bin_msg = True
+        self.__right_bin_msg = True
+        self.__parse_flag = True
+
+        ########### ######## Initialize Timer Callback for the Order ######################
+        self._timed_function = self.create_timer(0.5, self.parse_order, callback_group=self._timer_group)
 
         ############################ Initialize Service Clients ##########################
 
         # Service client for moving the floor robot to the home position
         self._move_floor_robot_home_client = self.create_client(
             Trigger, '/competitor/floor_robot/go_home',
-            callback_group=self.service_group)
+            callback_group=self._service_group)
         
         # Service client for entering the gripper slot
         self._goto_tool_changer_client = self.create_client(
             EnterToolChanger, '/competitor/floor_robot/enter_tool_changer',
-            callback_group=self.service_group)
+            callback_group=self._service_group)
         
         # Service client for retracting from the gripper slot
         self._retract_from_tool_changer_client = self.create_client(
             ExitToolChanger, '/competitor/floor_robot/exit_tool_changer',
-            callback_group=self.service_group)
+            callback_group=self._service_group)
         
         # Service client for retracting from agv
         self._retract_from_agv_client = self.create_client(
             RetractFromAGV, '/competitor/floor_robot/retract_from_agv',
-            callback_group=self.service_group)
+            callback_group=self._service_group)
 
         # Service client for picking tray
         self._pickup_tray_client = self.create_client(
             PickupTray, '/competitor/floor_robot/pickup_tray',
-            callback_group=self.service_group)
+            callback_group=self._service_group)
         
         # Service client for moving tray
         self._move_tray_to_agv_client = self.create_client(
             MoveTrayToAGV, '/competitor/floor_robot/move_tray_to_agv',
-            callback_group=self.service_group)
+            callback_group=self._service_group)
         
         # Service client for placing tray
         self._place_tray_client = self.create_client(
             PlaceTrayOnAGV, '/competitor/floor_robot/place_tray_on_agv',
-            callback_group=self.service_group)
+            callback_group=self._service_group)
         
         # Service client for picking tray
         self._pickup_part_client = self.create_client(
             PickupPart, '/competitor/floor_robot/pickup_part',
-            callback_group=self.service_group)
+            callback_group=self._service_group)
         
         # Service client for moving part
         self._move_part_to_agv_client = self.create_client(
             MovePartToAGV, '/competitor/floor_robot/move_part_to_agv',
-            callback_group=self.service_group)
+            callback_group=self._service_group)
         
         # Service client for placing part
         self._place_part_in_agv_client = self.create_client(
             PlacePartInTray, '/competitor/floor_robot/place_part_in_tray',
-            callback_group=self.service_group)
+            callback_group=self._service_group)
         
         # Service client for changing gripper
         self._change_robot_gripper_client = self.create_client(
             ChangeGripper, '/ariac/floor_robot_change_gripper',
-            callback_group=self.service_group)
+            callback_group=self._service_group)
         
         # Service client for enabling gripper
         self._enable_robot_gripper_client = self.create_client(
             VacuumGripperControl, '/ariac/floor_robot_enable_gripper',
-            callback_group=self.service_group)
+            callback_group=self._service_group)
         
 
     #######################################################################
     ######################### To call Service client ######################
     #######################################################################
-    def move_robot_home(self, robot_name):
+    def move_robot_home(self, robot_name:str) -> None: 
         '''
         Move one of the robots to its home position.
 
@@ -301,7 +334,7 @@ class rwa4(Node):
             self.get_logger().error(f'Service call failed {future.exception()}')
             self.get_logger().error('Unable to retract the robot from the tool changer')
 
-    def change_robot_gripper(self, gripper_type):
+    def change_robot_gripper(self, gripper_type:str):
         """
         Change robot gripper
 
@@ -737,7 +770,7 @@ class rwa4(Node):
 
         msg = String()
         msg.data = 'READY' 
-        self.publisher_.publish(msg)
+        self._order_status_pub.publish(msg)
 
     def orders_callback(self, msg):
         """
@@ -747,21 +780,21 @@ class rwa4(Node):
             msg (Order): Order read from topic /ariac/orders
         """
         
-        self.order.append(AriacOrder(order_id = msg.id,
+        self.__order.append(AriacOrder(order_id = msg.id,
                       order_type = msg.type,
                       order_priority = msg.priority,
                       kitting_task = msg.kitting_task
                       ))
         
-        if len(self.order) == 4:
-            self.order_id_to_pick = self._get_order_id
+        if len(self.__order) == 4:
+            self.__order_id_to_pick = self._get_order_id
 
             # enable the flags to log only the first message
-            self.table1_msg = True
-            self.table2_msg = True
-            self.left_bin_msg = True
-            self.right_bin_msg = True
-            self.parse_flag = True
+            self.__table1_msg = True
+            self.__table2_msg = True
+            self.__left_bin_msg = True
+            self.__right_bin_msg = True
+            self.__parse_flag = True
 
 
     def table1_callback(self, msg):
@@ -772,12 +805,12 @@ class rwa4(Node):
             msg (AdvancedLogicalCameraImage): Tray information from camera 1
         """
 
-        if self.table1_msg:
-            self.tray1_poses = TrayPoses(tray_poses = msg.tray_poses,
+        if self.__table1_msg:
+            self.__tray1_poses = TrayPoses(tray_poses = msg.tray_poses,
                             sensor_pose = msg.sensor_pose,
                             tray_table = "kts1")
-            if self.tray1_poses and self.tray1_poses.poses and self.tray1_poses.sensor_pose and self.tray1_poses.ids:
-                self.table1_msg = False
+            if self.__tray1_poses and self.__tray1_poses._poses and self.__tray1_poses._sensor_pose and self.__tray1_poses._ids:
+                self.__table1_msg = False
 
     def table2_callback(self, msg):
         """
@@ -787,12 +820,12 @@ class rwa4(Node):
             msg (AdvancedLogicalCameraImage): Tray information from camera 2
         """
 
-        if self.table2_msg:
-            self.tray2_poses = TrayPoses(tray_poses = msg.tray_poses,
+        if self.__table2_msg:
+            self.__tray2_poses = TrayPoses(tray_poses = msg.tray_poses,
                             sensor_pose = msg.sensor_pose,
                             tray_table = "kts2")
-            if self.tray2_poses and self.tray2_poses.poses and self.tray2_poses.sensor_pose and self.tray2_poses.ids:
-                self.table2_msg = False
+            if self.__tray2_poses and self.__tray2_poses._poses and self.__tray2_poses._sensor_pose and self.__tray2_poses._ids:
+                self.__table2_msg = False
                 
 
     def left_bin_callback(self, msg):
@@ -803,12 +836,12 @@ class rwa4(Node):
             msg (AdvancedLogicalCameraImage): Parts information from left bin
         """
 
-        if self.left_bin_msg:
-            self.part1_poses = PartPoses(part_poses = msg.part_poses,
+        if self.__left_bin_msg:
+            self.__part1_poses = PartPoses(part_poses = msg.part_poses,
                             sensor_pose = msg.sensor_pose,
                             part_bin = "left_bins")
-            if self.part1_poses and self.part1_poses.poses and self.part1_poses.parts and self.part1_poses.sensor_pose:
-                self.left_bin_msg = False
+            if self.__part1_poses and self.__part1_poses._poses and self.__part1_poses._parts and self.__part1_poses._sensor_pose:
+                self.__left_bin_msg = False
 
     def right_bin_callback(self, msg):
         """
@@ -818,12 +851,12 @@ class rwa4(Node):
             msg (AdvancedLogicalCameraImage): Parts information from right bin
         """
 
-        if self.right_bin_msg:
-            self.part2_poses = PartPoses(part_poses = msg.part_poses,
+        if self.__right_bin_msg:
+            self.__part2_poses = PartPoses(part_poses = msg.part_poses,
                             sensor_pose = msg.sensor_pose,
                             part_bin = "right_bins")
-            if self.part2_poses and self.part2_poses.poses and self.part2_poses.parts and self.part2_poses.sensor_pose:
-                self.right_bin_msg = False
+            if self.__part2_poses and self.__part2_poses._poses and self.__part2_poses._parts and self.__part2_poses._sensor_pose:
+                self.__right_bin_msg = False
 
     def parse_order(self):
         """
@@ -832,24 +865,24 @@ class rwa4(Node):
         Execute robot motion using service clients and the picked order information
         """
 
-        if self._kit_completed:
+        if self.__kit_completed:
             return
         
-        if ((not self.table1_msg) and (not self.table2_msg) and (not self.left_bin_msg) and (not self.right_bin_msg)) and self.parse_flag:
+        if ((not self.__table1_msg) and (not self.__table2_msg) and (not self.__left_bin_msg) and (not self.__right_bin_msg)) and self.__parse_flag:
             
             ############ Order ##########
-            order_picked = [order for order in self.order 
-                            if order.id == self.order_id_to_pick][0]
+            order_picked = [order for order in self.__order 
+                            if order._id == self.__order_id_to_pick][0]
 
-            output_order = "\n\n----------------------\n--- Order {} ---\n----------------------\n".format(order_picked.id)
+            output_order = "\n\n----------------------\n--- Order {} ---\n----------------------\n".format(order_picked._id)
 
             ############ Tray ##########
-            all_tray_ids = [*self.tray1_poses.ids, *self.tray2_poses.ids]
+            all_tray_ids = [*self.__tray1_poses._ids, *self.__tray2_poses._ids]
             
-            all_tray_poses = [*self.tray1_poses.poses, *self.tray2_poses.poses]
-            all_tray_tables = [*self.tray1_poses.tray_tables, *self.tray2_poses.tray_tables]
+            all_tray_poses = [*self.__tray1_poses._poses, *self.__tray2_poses._poses]
+            all_tray_tables = [*self.__tray1_poses._tray_tables, *self.__tray2_poses._tray_tables]
 
-            tray_id = order_picked.kitting_task.tray_id
+            tray_id = order_picked._kitting_task._tray_id
             cur_tray_pose = None
             cur_tray_table = None
 
@@ -865,8 +898,8 @@ class rwa4(Node):
             final_order_action = OrderActionParams(tray_id=tray_id,
                                                    tray_table=cur_tray_table,
                                                    tray_pose=cur_tray_pose,
-                                                   agv_number="agv{}".format(str(order_picked.kitting_task.agv_number)),
-                                                   destination=order_picked.kitting_task.destination
+                                                   agv_number="agv{}".format(str(order_picked._kitting_task._agv_number)),
+                                                   destination=order_picked._kitting_task._destination
                                                    )
             output_tray = "\n  - id: {} \n  - pose:\n    - position: [{}, {}, {}] \n    - orientation: [{}, {}, {}, {}]".format(tray_id, 
                                                                                                                   cur_tray_pose.position.x, 
@@ -877,21 +910,21 @@ class rwa4(Node):
                                                                                                                 cur_tray_pose.orientation.z,
                                                                                                                 cur_tray_pose.orientation.w)
             ############ Parts ############
-            all_part_parts = [*self.part1_poses.parts, *self.part2_poses.parts]
-            all_part_poses = [*self.part1_poses.poses, *self.part2_poses.poses]
+            all_part_parts = [*self.__part1_poses._parts, *self.__part2_poses._parts]
+            all_part_poses = [*self.__part1_poses._poses, *self.__part2_poses._poses]
             output_part_string = []
             part_history = []
-            for cur_part in order_picked.kitting_task.parts:
+            for cur_part in order_picked._kitting_task._parts:
                 for part_idx, part_parts in enumerate(all_part_parts):
-                    if cur_part.color == part_parts.color and cur_part.type == part_parts.type:
+                    if cur_part._color == part_parts._color and cur_part._type == part_parts._type:
                             cur_part_pose = all_part_poses[part_idx]
                             if cur_part_pose in part_history:
                                 continue
                             else:
                                 part_history.append(cur_part_pose)
                             
-                            output_part_n = "  - {} {}\n    - pose:\n      - position: [{}, {}, {}] \n      - orientation: [{}, {}, {}, {}]\n".format(self.color_dict[cur_part.color], 
-                                                                                                                    self.type_dict[cur_part.type],
+                            output_part_n = "  - {} {}\n    - pose:\n      - position: [{}, {}, {}] \n      - orientation: [{}, {}, {}, {}]\n".format(self._color_dict[cur_part._color], 
+                                                                                                                    self._type_dict[cur_part._type],
                                                                                                                     cur_part_pose.position.x, 
                                                                                                                     cur_part_pose.position.y, 
                                                                                                                     cur_part_pose.position.z, 
@@ -900,10 +933,10 @@ class rwa4(Node):
                                                                                                                     cur_part_pose.orientation.z,
                                                                                                                     cur_tray_pose.orientation.w)
                             
-                            final_order_action.add_parts(part_type=cur_part.type,
-                                                         part_color=cur_part.color,
-                                                         part_quadrant=cur_part.quadrant,
-                                                         part_bin=part_parts.part_bin,
+                            final_order_action.add_parts(part_type=cur_part._type,
+                                                         part_color=cur_part._color,
+                                                         part_quadrant=cur_part._quadrant,
+                                                         part_bin=part_parts._part_bin,
                                                          part_pose=cur_part_pose
                             )
                             output_part_string.append(output_part_n)
@@ -911,23 +944,23 @@ class rwa4(Node):
                     
             part_string = "".join("{}".format(part) for part in output_part_string)
             output = "{} \nTray:{} \nPart:\n{}".format(output_order, output_tray, part_string)
-            self.get_logger().info("Order {} picked and parsed".format(order_picked.id))
-            self.get_logger().info('Order %s' % output)
-            self.parse_flag = False
+            self.get_logger().info("Order {} picked and parsed".format(order_picked._id))
+            self.get_logger().info('%s' % output)
+            self.__parse_flag = False
 
             # Create AGV specific service client clients
             self._lock_agv_client = self.create_client(
-                        Trigger, '/ariac/{}_lock_tray'.format(final_order_action.agv_number),
-                        callback_group=self.service_group)
+                        Trigger, '/ariac/{}_lock_tray'.format(final_order_action._agv_number),
+                        callback_group=self._service_group)
 
             self._move_agv_to_warehouse_client = self.create_client(
-                MoveAGV, '/ariac/move_{}'.format(final_order_action.agv_number),
-                callback_group=self.service_group)
+                MoveAGV, '/ariac/move_{}'.format(final_order_action._agv_number),
+                callback_group=self._service_group)
 
             # Start Robot kitting after all the order information is received
             self.robot_kitting(final_order_action=final_order_action)
             
-            self._kit_completed = True
+            self.__kit_completed = True
 
             
     def robot_kitting(self, final_order_action):
@@ -942,40 +975,40 @@ class rwa4(Node):
         self.move_robot_home("floor_robot")
         
         # change gripper type
-        self.goto_tool_changer("floor_robot", final_order_action.tray_table, "trays")
+        self.goto_tool_changer("floor_robot", final_order_action._tray_table, "trays")
         self.change_robot_gripper("tray")
-        self.retract_from_tool_changer("floor_robot", final_order_action.tray_table, "trays")
+        self.retract_from_tool_changer("floor_robot", final_order_action._tray_table, "trays")
 
         # pick and place tray
-        self.pickup_tray("floor_robot", final_order_action.tray_id, final_order_action.tray_pose, final_order_action.tray_table)
-        self.move_tray_to_agv("floor_robot", final_order_action.tray_pose, final_order_action.agv_number)
-        self.place_tray("floor_robot", final_order_action.tray_id, final_order_action.agv_number)
-        self.retract_from_agv("floor_robot", final_order_action.agv_number)
+        self.pickup_tray("floor_robot", final_order_action._tray_id, final_order_action._tray_pose, final_order_action._tray_table)
+        self.move_tray_to_agv("floor_robot", final_order_action._tray_pose, final_order_action._agv_number)
+        self.place_tray("floor_robot", final_order_action._tray_id, final_order_action._agv_number)
+        self.retract_from_agv("floor_robot", final_order_action._agv_number)
 
         # change gripper to pick up parts
-        self.goto_tool_changer("floor_robot", final_order_action.tray_table, "parts")
+        self.goto_tool_changer("floor_robot", final_order_action._tray_table, "parts")
         self.change_robot_gripper("part")
-        self.retract_from_tool_changer("floor_robot", final_order_action.tray_table, "parts")
+        self.retract_from_tool_changer("floor_robot", final_order_action._tray_table, "parts")
 
         # for loop to go through all the parts
-        for cur_part in final_order_action.parts:
+        for cur_part in final_order_action._parts:
 
             # pick and place purple pump
             self.pickup_part("floor_robot", cur_part[4], cur_part[0], cur_part[1], cur_part[3])
-            self.move_part_to_agv("floor_robot", cur_part[4], final_order_action.agv_number, cur_part[2])
-            self.place_part_in_tray("floor_robot", final_order_action.agv_number, cur_part[2])
-            self.retract_from_agv("floor_robot", final_order_action.agv_number)
+            self.move_part_to_agv("floor_robot", cur_part[4], final_order_action._agv_number, cur_part[2])
+            self.place_part_in_tray("floor_robot", final_order_action._agv_number, cur_part[2])
+            self.retract_from_agv("floor_robot", final_order_action._agv_number)
 
             # move robot home
             self.move_robot_home("floor_robot")
 
         # move agv to warehouse
         self.lock_agv()
-        self.move_agv_to_warehouse(final_order_action.destination)
+        self.move_agv_to_warehouse(final_order_action._destination)
 
 def main(args=None):
     rclpy.init(args=args)
-    my_node = rwa4()
+    my_node = ARIACKitting()
     try:
         rclpy.spin(my_node)
     except KeyboardInterrupt:
